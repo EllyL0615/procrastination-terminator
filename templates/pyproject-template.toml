@@ -1,0 +1,25 @@
+# Extra [tool.*] config to drop on top of what `uv init` generates (it already creates [project] + a basic skeleton).
+# Dev tools (uv init does NOT add these): `uv add --dev ruff mypy pytest`
+# Add deps later: `uv add <pkg>` (runtime) / `uv add --dev <pkg>` (dev) — uv writes the version bounds for you.
+#
+# Default is a flat, script-style layout. Writing a package to publish? Use `uv init --package` (src/ layout),
+# add a [build-system] block, and consider turning on mypy `strict = true` below.
+
+# ---- Ruff (lint + format; replaces black / flake8 / isort) ----
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# A reasonable default set; trim if noisy, extend to be stricter. Optional tuning — Ruff's built-in default works too.
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]  # line length is the formatter's job
+
+# ---- mypy ----
+[tool.mypy]
+python_version = "3.12"
+# strict = true  # turn on when the project gets serious / you write a package
+
+# ---- pytest ----
+[tool.pytest.ini_options]
+testpaths = ["tests"]

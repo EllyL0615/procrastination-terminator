@@ -1,0 +1,19 @@
+# Disposable single-change plans (see CLAUDE.md)
+plans/
+
+# Python (if you scaffold or test templates here)
+__pycache__/
+*.py[cod]
+.venv/
+
+# Secrets / local env (commit a sanitized .env.example instead)
+.env
+.env.*
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# Local-only Claude Code settings
+.claude/settings.local.json
