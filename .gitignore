@@ -17,3 +17,9 @@ Thumbs.db
 
 # Local-only Claude Code settings
 .claude/settings.local.json
+
+# Runtime state & user data (never commit; needs a persistent volume in prod)
+/data/
+plan.txt
+progress.csv
+history.csv
