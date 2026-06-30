@@ -30,7 +30,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from .models import Task
+from . import backoff
+from .models import Status, Task
 
 
 class Action(enum.Enum):
@@ -44,6 +45,18 @@ class Action(enum.Enum):
     END_CHECK_HANDOFF = "end_check_handoff"
 
 
+def _progress_time(task: Task) -> datetime | None:
+    """The timestamp the monitor dedupes against, or None if never recorded."""
+    if task.latest_progress_time is None:
+        return None
+    return datetime.fromisoformat(task.latest_progress_time)
+
+
+def _before(moment: datetime | None, boundary: datetime) -> bool:
+    """Whether ``moment`` is before ``boundary``; a missing moment counts as before."""
+    return moment is None or moment < boundary
+
+
 def decide(
     task: Task,
     now: datetime,
@@ -53,5 +66,38 @@ def decide(
     midpoint: datetime,
     is_last_task: bool,
 ) -> Action:
-    """Decide the action for ``task`` at ``now`` (see module docstring)."""
-    raise NotImplementedError
+    """Decide the action for ``task`` at ``now`` (see module docstring).
+
+    Called for a ``study``/``work`` task in the current logical day. The planned
+    boundaries are resolved by the caller (via :mod:`daytime`); the dedup
+    timestamp is read from the task itself.
+    """
+    if task.status is Status.COMPLETED:
+        return Action.SKIP
+    if is_last_task:
+        # The day's last task is never nagged, only a time boundary (SPEC §4.2, §7).
+        return Action.SKIP
+
+    if task.status is Status.NOT_STARTED:
+        if now < planned_start:
+            return Action.WAIT
+        return Action.NAG_START  # first nag; caller flips status to OVERDUE
+
+    if task.status is Status.OVERDUE:
+        if now >= planned_end:
+            return Action.STOP_NAGGING  # give up nagging; keep status OVERDUE
+        if backoff.should_nag(now - planned_start):
+            return Action.NAG_START
+        return Action.WAIT
+
+    if task.status is Status.IN_PROGRESS:
+        progressed_at = _progress_time(task)
+        # End is checked before midpoint so a restart that skipped the midpoint
+        # window goes straight to the handoff (SPEC §3.2, A1).
+        if now >= planned_end:
+            return Action.END_CHECK_HANDOFF if _before(progressed_at, planned_end) else Action.WAIT
+        if now >= midpoint:
+            return Action.MIDPOINT_CHECK if _before(progressed_at, midpoint) else Action.WAIT
+        return Action.WAIT
+
+    return Action.WAIT  # unreachable: all Status members handled above
