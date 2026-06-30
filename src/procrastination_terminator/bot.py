@@ -42,6 +42,20 @@ def _now_clock(now: datetime) -> str:
     return now.strftime("%H:%M")
 
 
+def _apply_edit(task: Task, edit: dict[str, str]) -> None:
+    """Apply one LLM ``update`` edit to a task in place (SPEC §6)."""
+    if "planned_start" in edit:
+        task.planned_start = edit["planned_start"]
+    if "planned_end" in edit:
+        task.planned_end = edit["planned_end"]
+    if "description" in edit:
+        task.description = edit["description"]
+    if "type" in edit:
+        task.type = TaskType(edit["type"])
+    if "status" in edit:
+        task.status = Status(edit["status"])
+
+
 class Supervisor(discord.Client):
     """The bot: a per-minute supervisor loop plus DM command handling."""
 
@@ -84,23 +98,26 @@ class Supervisor(discord.Client):
 
         changed: dict[str, Task] = {}
         situations: list[str] = []
-        delays: list[timedelta] = []
         lead: Task | None = None
-        for task, start, end in resolved:
+        lead_delay = timedelta(0)
+        for i, (task, start, end) in enumerate(resolved):
             if task.type not in _NAGGED_TYPES:
                 continue
             action = monitor_decide(task, now, start, end, is_last=task.code == last_code)
-            line = self._apply(task, action, now, start, changed)
+            line = self._apply(task, action, now, changed)
             if line is None:
                 continue
             situations.append(line)
+            if action is Action.END_CHECK_HANDOFF:
+                handoff = self._handoff(resolved, i, last_code, changed)
+                if handoff is not None:
+                    situations.append(handoff)
             delay = now - start if action_is_nag(action) else timedelta(0)
-            if lead is None or delay > max(delays, default=timedelta(0)):
-                lead = task
-            delays.append(delay)
+            if lead is None or delay > lead_delay:
+                lead, lead_delay = task, delay
 
         if situations and lead is not None:
-            await self._say(situations, lead, today, intensity=tone.intensity_for(max(delays)))
+            await self._say(situations, lead, today, intensity=tone.intensity_for(lead_delay))
         if changed:
             store.upsert_changed(self.config.progress_path, list(changed.values()))
 
@@ -124,7 +141,7 @@ class Supervisor(discord.Client):
         return resolved
 
     def _apply(
-        self, task: Task, action: Action, now: datetime, start: datetime, changed: dict[str, Task]
+        self, task: Task, action: Action, now: datetime, changed: dict[str, Task]
     ) -> str | None:
         """Apply a decision's side effects to ``task``; return the message line, if any."""
         if action is Action.NAG_START:
@@ -141,6 +158,30 @@ class Supervisor(discord.Client):
             changed[task.code] = task
             return f"Confirm '{task.description}' is wrapping up and hand off to what's next."
         return None
+
+    def _handoff(
+        self,
+        resolved: list[tuple[Task, datetime, datetime]],
+        index: int,
+        last_code: str,
+        changed: dict[str, Task],
+    ) -> str | None:
+        """Let the end handoff double as the next task's first nag (SPEC §4.2, A8).
+
+        Only fires when the immediate successor is a nagged, non-last task that is
+        still NOT_STARTED -- if it is already overdue/active the monitor covers it,
+        so we must not nag it twice.
+        """
+        if index + 1 >= len(resolved):
+            return None
+        nxt = resolved[index + 1][0]
+        if nxt.code == last_code or nxt.type not in _NAGGED_TYPES:
+            return None
+        if nxt.status is not Status.NOT_STARTED:
+            return None
+        nxt.status = Status.OVERDUE
+        changed[nxt.code] = nxt
+        return f"Then start the next task '{nxt.description}' (code {nxt.code})."
 
     def _mark_awaiting(self, task: Task, now: datetime) -> None:
         task.latest_progress = _AWAITING
@@ -218,7 +259,7 @@ class Supervisor(discord.Client):
         elif name == "progress":
             await self._dm(self._render_table())
         elif name == "modify":
-            await self._dm("`!modify` is not implemented yet; edit progress.csv directly for now.")
+            await self._modify(arg)
         else:
             await self._dm(f"Unknown command: !{name}")
 
@@ -250,6 +291,35 @@ class Supervisor(discord.Client):
         await self._say(
             [situation], active[0] if active else None, datetime.now(self.config.tz).date()
         )
+
+    async def _modify(self, instruction: str) -> None:
+        """Let the LLM edit progress.csv from a natural-language instruction (SPEC §6)."""
+        if not instruction:
+            await self._dm("Tell me what to change, e.g. `!modify move RUN to 19:00`.")
+            return
+        tasks = store.load(self.config.progress_path)
+        by_code = {t.code: t for t in tasks}
+        deleted: set[str] = set()
+        touched: list[Task] = []
+        try:
+            for edit in await self.llm.plan_edits(tasks, instruction):
+                task = by_code.get(edit.get("code", ""))
+                if task is None:
+                    continue
+                if edit.get("op") == "delete":
+                    deleted.add(task.code)
+                elif edit.get("op") == "update":
+                    _apply_edit(task, edit)
+                    touched.append(task)
+        except ValueError as exc:
+            await self._dm(f"Could not apply that edit: {exc}")
+            return
+        if deleted:
+            kept = [t for t in tasks if t.code not in deleted]
+            store.write_all(self.config.progress_path, kept)
+        elif touched:
+            store.upsert_changed(self.config.progress_path, touched)
+        await self._dm(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
 
     async def _maybe_advance(self, task: Task, content: str) -> None:
         now = datetime.now(self.config.tz)

@@ -160,6 +160,25 @@ class LLMClient:
         raw = _extract_json(content).get("tasks", [])
         return [{str(k): str(v) for k, v in item.items()} for item in raw]
 
+    async def plan_edits(self, tasks: list[Task], instruction: str) -> list[dict[str, str]]:
+        """Turn a natural-language edit into structured operations on the table (SPEC §6)."""
+        catalogue = "\n".join(
+            f"{t.code} | {t.planned_start}-{t.planned_end} | {t.type.value} | "
+            f"{t.status.value} | {t.description}"
+            for t in tasks
+        )
+        content = await self._chat(
+            "Apply the user's edit to their task table (code | time | type | status | "
+            f"description):\n{catalogue}\n"
+            'Reply as JSON: {"edits": [{"op": "delete", "code": "..."} or '
+            '{"op": "update", "code": "...", and any of planned_start, planned_end, '
+            "description, type, status to change}]}.",
+            instruction,
+            json_mode=True,
+        )
+        raw = _extract_json(content).get("edits", [])
+        return [{str(k): str(v) for k, v in item.items()} for item in raw]
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()
