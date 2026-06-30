@@ -33,3 +33,19 @@ def resolve(logical_date: date, clock: time, day_start: time, tz: tzinfo) -> dat
 def midpoint(start: datetime, end: datetime) -> datetime:
     """Midpoint of the interval [``start``, ``end``]."""
     return start + (end - start) / 2
+
+
+def date_from_md(md: str, reference: date) -> date:
+    """Resolve a yearless ``"MM.DD"`` to the calendar date closest to ``reference``.
+
+    plan.txt dates carry no year; pick the year (within +/-1 of ``reference``)
+    that lands nearest the reference date, so end-of-year wrap resolves sanely.
+    """
+    month, day = (int(part) for part in md.split("."))
+    candidates: list[date] = []
+    for year in (reference.year - 1, reference.year, reference.year + 1):
+        try:
+            candidates.append(date(year, month, day))
+        except ValueError:
+            continue  # e.g. 02.29 in a non-leap year
+    return min(candidates, key=lambda d: abs((d - reference).days))

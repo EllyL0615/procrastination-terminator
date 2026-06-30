@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from procrastination_terminator.daytime import logical_day_of, midpoint, resolve
+from procrastination_terminator.daytime import (
+    date_from_md,
+    logical_day_of,
+    midpoint,
+    resolve,
+)
 
 TZ = ZoneInfo("Europe/London")
 DAY_START = time(4, 0)
@@ -37,3 +42,15 @@ def test_logical_day_before_day_start_is_previous_date() -> None:
 def test_logical_day_after_day_start_is_same_date() -> None:
     moment = datetime(2026, 3, 13, 23, 0, tzinfo=TZ)
     assert logical_day_of(moment, DAY_START) == date(2026, 3, 13)
+
+
+def test_date_from_md_same_year() -> None:
+    assert date_from_md("03.13", date(2026, 3, 10)) == date(2026, 3, 13)
+
+
+def test_date_from_md_wraps_to_next_year() -> None:
+    assert date_from_md("01.01", date(2025, 12, 31)) == date(2026, 1, 1)
+
+
+def test_date_from_md_wraps_to_previous_year() -> None:
+    assert date_from_md("12.31", date(2026, 1, 1)) == date(2025, 12, 31)
