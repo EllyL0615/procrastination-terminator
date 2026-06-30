@@ -24,6 +24,14 @@ class Status(enum.Enum):
     COMPLETED = "completed"
 
 
+class Personality(enum.Enum):
+    """Message personality flavour (SPEC §4.5)."""
+
+    GENTLE = "gentle"
+    STRICT = "strict"
+    SARCASTIC = "sarcastic"
+
+
 # progress.csv column order (SPEC §2). history.csv shares the same schema.
 CSV_COLUMNS: tuple[str, ...] = (
     "code",

@@ -32,6 +32,7 @@ class Config:
     day_end: time = time(23, 0)
     poll_seconds: int = 60
     personality_granularity: PersonalityGranularity = PersonalityGranularity.PER_TASK
+    message_language: str = "zh"
     plan_path: str = "data/plan.txt"
     progress_path: str = "data/progress.csv"
     history_path: str = "data/history.csv"
@@ -59,4 +60,5 @@ class Config:
             llm_model=_require("LLM_MODEL"),
             bot_name=os.environ.get("BOT_NAME", "Bot"),
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
+            message_language=os.environ.get("MESSAGE_LANG", "zh"),
         )
