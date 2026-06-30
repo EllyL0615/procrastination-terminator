@@ -3,8 +3,8 @@
 discord.py carries everything: DM send/receive, the per-minute supervisor poll
 (``ext.tasks`` ``@tasks.loop(minutes=1)``), and the day-start / day-end triggers
 (checked by time inside the loop, so no APScheduler). Command handlers for
-``!已开始`` / ``!已完成`` / ``!重载`` / ``!进度`` / ``!修改`` and free-chat are
-registered during implementation; see SPEC §3 and §6.
+``!started`` / ``!completed`` / ``!sync`` / ``!progress`` / ``!modify`` and
+free-chat are registered during implementation; see SPEC §3 and §6.
 """
 
 from __future__ import annotations

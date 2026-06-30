@@ -9,32 +9,32 @@ from dataclasses import dataclass
 class TaskType(enum.Enum):
     """Task type; judged by the LLM at insert time, editable by hand (SPEC §2)."""
 
-    STUDY = "学习"
-    WORK = "工作"
-    OUTING = "外出"
-    OTHER = "其他"
+    STUDY = "study"
+    WORK = "work"
+    OUTING = "outing"
+    OTHER = "other"
 
 
 class Status(enum.Enum):
     """Lifecycle state of a study/work task (SPEC §4)."""
 
-    NOT_STARTED = "未开始"
-    PROMPTING = "催促中"
-    IN_PROGRESS = "进行中"
-    DONE = "已完成"
+    NOT_STARTED = "not_started"
+    OVERDUE = "overdue"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
 
 
 # progress.csv column order (SPEC §2). history.csv shares the same schema.
 CSV_COLUMNS: tuple[str, ...] = (
-    "代号",
-    "日期",
-    "计划时间",
-    "任务",
-    "类型",
-    "状态",
-    "实际时间",
-    "最新进度",
-    "最新进度时间",
+    "code",
+    "date",
+    "planned_time",
+    "task",
+    "type",
+    "status",
+    "actual_time",
+    "latest_progress",
+    "latest_progress_time",
 )
 
 

@@ -1,4 +1,4 @@
-"""Logical-day ("作息日") helpers (SPEC §5, §3.2).
+"""Logical-day helpers (SPEC §5, §3.2).
 
 A logical day runs from ``day_start`` (default 04:00) to the next day's
 ``day_start``. A clock time earlier than ``day_start`` belongs to the *previous*

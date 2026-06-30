@@ -9,12 +9,12 @@ Decision table (for a study/work task in the current logical day that is NOT the
 day's last task -- the last task is never nagged, only a boundary):
 
     status        time situation                                  -> action
-    DONE          --                                              -> SKIP
+    COMPLETED     --                                              -> SKIP
     NOT_STARTED   before planned start                            -> WAIT
     NOT_STARTED   at/after planned start                          -> NAG_START
-    PROMPTING     before planned end, on a backoff nag minute     -> NAG_START
-    PROMPTING     before planned end, off a nag minute            -> WAIT
-    PROMPTING     after planned end                               -> STOP_NAGGING
+    OVERDUE       before planned end, on a backoff nag minute     -> NAG_START
+    OVERDUE       before planned end, off a nag minute            -> WAIT
+    OVERDUE       after planned end                               -> STOP_NAGGING
     IN_PROGRESS   before midpoint                                 -> WAIT
     IN_PROGRESS   past midpoint (but not end), progress < midpoint -> MIDPOINT_CHECK
     IN_PROGRESS   past end, progress < end                        -> END_CHECK_HANDOFF
