@@ -106,6 +106,11 @@ def load(path: str) -> list[Task]:
     return [_from_row(row) for row in _read_raw(Path(path))]
 
 
+def write_all(path: str, tasks: list[Task]) -> None:
+    """Replace the whole file with ``tasks`` (used by sync, which deletes rows)."""
+    _write_atomic(Path(path), [_to_row(t) for t in tasks])
+
+
 def upsert_changed(path: str, changed: Iterable[Task]) -> None:
     """Re-read ``path`` and write back only the given changed rows (A6).
 

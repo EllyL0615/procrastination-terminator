@@ -142,6 +142,24 @@ class LLMClient:
         )
         return (await self._chat(system, situation)).strip()
 
+    async def parse_plan(self, text: str) -> list[dict[str, str]]:
+        """Extract structured task entries from free-form plan.txt (SPEC §9).
+
+        Each entry has date (MM.DD), time (HH:MM start), subject (short tag),
+        description, and type; :func:`plan_parser.build_tasks` assembles them.
+        """
+        content = await self._chat(
+            "Extract the user's tasks from their plan. For each task output: "
+            "date (MM.DD), time (HH:MM start), subject (a short uppercase tag like PGM), "
+            "description, and type (one of study, work, outing, other). "
+            'Reply as JSON: {"tasks": [{"date": ..., "time": ..., "subject": ..., '
+            '"description": ..., "type": ...}, ...]}.',
+            text,
+            json_mode=True,
+        )
+        raw = _extract_json(content).get("tasks", [])
+        return [{str(k): str(v) for k, v in item.items()} for item in raw]
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from .models import Task
+from .models import Status, Task, TaskType
 
 
 @dataclass
@@ -47,13 +47,37 @@ def find_duplicate_codes(tasks: list[Task]) -> list[str]:
     return list(seen)
 
 
-def parse(text: str) -> list[Task]:
-    """Parse plan.txt into tasks (types judged by the LLM).
+def build_tasks(entries: list[dict[str, str]]) -> list[Task]:
+    """Assemble Task rows from raw LLM-extracted plan entries (pure).
 
-    Raises :class:`DuplicateCodeError` if two tasks resolve to the same code --
-    that means a typo in plan.txt, and the bot should ask the user to fix it.
+    Each entry has ``date`` (``MM.DD``), ``time`` (``HH:MM`` start), ``subject``
+    (short code), ``description``, and ``type``. Entries are ordered by date+time;
+    each task's ``planned_end`` is the next same-day task's start (SPEC §2), and
+    the day's last task ends at its own start (it is only a boundary, never
+    nagged). Raises :class:`DuplicateCodeError` on a repeated code (SPEC §3.1, C2).
     """
-    raise NotImplementedError
+    ordered = sorted(entries, key=lambda e: (e["date"], e["time"]))
+    tasks: list[Task] = []
+    for i, entry in enumerate(ordered):
+        date, start = entry["date"], entry["time"]
+        nxt = ordered[i + 1] if i + 1 < len(ordered) else None
+        end = nxt["time"] if nxt is not None and nxt["date"] == date else start
+        code = f"{date.replace('.', '')}-{start.replace(':', '')}-{entry['subject']}"
+        tasks.append(
+            Task(
+                code=code,
+                date=date,
+                planned_start=start,
+                planned_end=end,
+                description=entry["description"],
+                type=TaskType(entry["type"]),
+                status=Status.NOT_STARTED,
+            )
+        )
+    duplicates = find_duplicate_codes(tasks)
+    if duplicates:
+        raise DuplicateCodeError(duplicates)
+    return tasks
 
 
 def diff_sync(existing: list[Task], parsed: list[Task], today: str) -> SyncPlan:
