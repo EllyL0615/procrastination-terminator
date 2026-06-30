@@ -1,9 +1,0 @@
-新项目起手,按我 ~/.claude/CLAUDE.md 的约定来(uv + ruff + mypy + pytest、默认扁平布局)。
-
-1. 先 `uv init 《项目名》` 起手(顺带建好 git 仓库 + `.gitignore` + 骨架)。要写库 / 发布才用 `uv init --package`(src/ 布局)。
-2. 铺文件:`pyproject.toml` 拷 `templates/` 里的(去掉 `-template` 后缀,叠在 uv 生成的之上)。项目级 `CLAUDE.md`、`SPEC.md` 没模板——据我全局 `~/.claude/CLAUDE.md` 现生成骨架(CLAUDE.md 只写项目特有事实 + 覆盖项、≤100 行;SPEC.md 按「文档与计划」的分节起)。README 直接编辑 `uv init` 生成的那份。填好项目名、占位 《…》 别留空,把 `plans/` 追加进 `.gitignore`。
-3. 跑 `uv add --dev ruff mypy pytest` 装好工具链。(pre-commit 可选:多人协作 / 项目变认真时再拷 `templates/.pre-commit-config-template.yaml` 并 `uvx pre-commit install`。)
-4. 先别写实现代码。我有个还很模糊的想法,我们先在 SPEC.md 上一来一回把它聊清楚——你来追问、补全范围和待解决问号,我拍板;拿不准就停下来问。
-
-我的想法:
-《在这里写你那句模糊的 idea》
