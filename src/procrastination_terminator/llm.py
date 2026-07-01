@@ -102,16 +102,6 @@ class LLMClient:
         data = response.json()
         return str(data["choices"][0]["message"]["content"])
 
-    async def classify_type(self, description: str) -> TaskType:
-        """Classify a task description into a TaskType (SPEC §2)."""
-        content = await self._chat(
-            "Classify the task into one of: study, work, outing, other. "
-            'Reply as JSON: {"type": "<value>"}.',
-            description,
-            json_mode=True,
-        )
-        return TaskType(_extract_json(content)["type"])
-
     async def judge_started(self, task: Task, reply: str) -> bool:
         """Judge, with a high bar, whether the reply shows the user really started (SPEC §4.1)."""
         return await self._judge_bool(
