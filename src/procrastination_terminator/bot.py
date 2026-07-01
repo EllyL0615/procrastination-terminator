@@ -11,6 +11,8 @@ a live Discord + LLM; the decision logic they call is unit-tested elsewhere.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import random
 import re
 import unicodedata
@@ -26,6 +28,8 @@ from .models import Personality, Status, Task, TaskType
 from .monitor import Action, decide
 from .plan_parser import DuplicateCodeError, build_tasks, diff_sync, parse_plan_text
 from .storage import StorageBackend, build_backend
+
+_log = logging.getLogger(__name__)
 
 _AWAITING = "awaiting reply"  # placeholder progress marker (SPEC §3.2 robustness)
 _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
@@ -173,9 +177,16 @@ class Supervisor(discord.Client):
 
     @discord_tasks.loop(seconds=60)
     async def tick(self) -> None:
+        # A raised exception would terminate the ext.tasks loop for good, leaving
+        # the bot online but never nagging again. The monitor is memoryless, so
+        # skipping a failed tick is safe: the next one re-reads the snapshot and
+        # retries whatever still applies.
         now = datetime.now(self.config.tz)
-        await self._maybe_boundaries(now)
-        await self._supervise(now)
+        try:
+            await self._maybe_boundaries(now)
+            await self._supervise(now)
+        except Exception:
+            _log.exception("supervisor tick failed; skipping this tick")
 
     @tick.before_loop
     async def _before_tick(self) -> None:
@@ -229,6 +240,14 @@ class Supervisor(discord.Client):
                     today, _parse_clock(task.planned_end), self.config.day_start, self.config.tz
                 )
             except ValueError:
+                # Usually a hand-edit typo; without the log the task just silently
+                # drops out of supervision.
+                _log.warning(
+                    "task %s has unparsable planned time %r-%r; skipping it this tick",
+                    task.code,
+                    task.planned_start,
+                    task.planned_end,
+                )
                 continue
             resolved.append((task, start, end))
         resolved.sort(key=lambda row: row[0].code)  # code encodes logical-day order (SPEC §2)
@@ -295,12 +314,17 @@ class Supervisor(discord.Client):
 
     async def _maybe_boundaries(self, now: datetime) -> None:
         today = now.date()
+        # Mark a boundary done only after its handler succeeds: on a transient
+        # failure (the tick loop catches it) the next tick retries the boundary
+        # instead of silently skipping it for the whole day.
         if now.time() >= self.config.day_start and self._last_day_start != today:
-            self._last_day_start = today
+            _log.info("day-start boundary firing (%s)", now)
             await self._day_start(now)
+            self._last_day_start = today
         if now.time() >= self.config.day_end and self._last_day_end != today:
-            self._last_day_end = today
+            _log.info("day-end boundary firing (%s)", now)
             await self._day_end(now)
+            self._last_day_end = today
 
     async def _day_start(self, now: datetime) -> None:
         await self.store.refresh_context()  # once a day is enough for standing context
@@ -363,11 +387,18 @@ class Supervisor(discord.Client):
         ):
             return  # only the owner, only in the bot's channel
         content = message.content.strip()
-        if content.startswith("!"):
-            head, _, arg = content[1:].partition(" ")
-            await self._command(head.lower(), arg.strip())
-        else:
-            await self._free_chat(content)
+        try:
+            if content.startswith("!"):
+                head, _, arg = content[1:].partition(" ")
+                await self._command(head.lower(), arg.strip())
+            else:
+                await self._free_chat(content)
+        except Exception:
+            # Without this the failure is only a server-side traceback and the
+            # user gets dead silence (e.g. the LLM endpoint is down during !sync).
+            _log.exception("handling message failed: %r", content)
+            with contextlib.suppress(Exception):
+                await self._send("Something went wrong handling that; please try again.")
 
     async def _command(self, name: str, arg: str) -> None:
         if name == "started":

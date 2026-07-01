@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -18,6 +19,8 @@ import httpx
 
 from .config import Config
 from .models import Personality, Task, TaskType
+
+_log = logging.getLogger(__name__)
 
 # Outcome of classifying an in-progress task's reply (SPEC §4.2, §6).
 ReplyKind = Literal["completed", "progress", "chat"]
@@ -247,6 +250,9 @@ class LLMClient:
             item = by_index.get(i, {})
             task_type = str(item.get("type", "")).lower()
             if task_type not in types:
+                _log.warning(
+                    "plan annotation %d missing or invalid (%r); defaulting to study", i, item
+                )
                 task_type = TaskType.STUDY.value
             annotations.append({"type": task_type, "notes": str(item.get("notes", "")).strip()})
         return annotations

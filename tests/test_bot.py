@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, tzinfo
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from types import SimpleNamespace
 from typing import cast
 from zoneinfo import ZoneInfo
+
+import discord
+import pytest
 
 from procrastination_terminator.bot import Supervisor
 
@@ -220,6 +224,76 @@ def test_recent_dialogue_strips_content_and_skips_blank_turns() -> None:
     bot = _Bot(messages, tz=UTC)
 
     assert _dialogue(bot) == [{"role": "assistant", "content": "[07-01 13:00] keep at it"}]
+
+
+# -- error containment ------------------------------------------------------------
+# An exception escaping the ext.tasks loop terminates it for good (bot online, never
+# nagging again), and an exception in on_message is only a server-side traceback.
+# These pin the guards: a failed tick is skipped and retried, a failed command tells
+# the user, and a failed day boundary is re-attempted next tick instead of being
+# marked done for the day.
+
+
+def test_tick_swallows_a_failing_supervise_pass() -> None:
+    class _Boom:
+        config = SimpleNamespace(tz=UTC)
+
+        async def _maybe_boundaries(self, now: datetime) -> None:
+            raise RuntimeError("LLM down")
+
+        async def _supervise(self, now: datetime) -> None:
+            raise AssertionError("unreachable: boundaries already raised")
+
+    asyncio.run(Supervisor.tick.coro(cast(Supervisor, _Boom())))  # must not raise
+
+
+def test_on_message_failure_is_reported_to_the_user() -> None:
+    @dataclass
+    class _Failing:
+        config = SimpleNamespace(discord_user_id=USER_ID, discord_channel_id=7)
+        sent: list[str] = field(default_factory=list)
+
+        async def _command(self, name: str, arg: str) -> None:
+            raise RuntimeError("LLM down")
+
+        async def _send(self, text: str, *, mention: bool = False) -> None:
+            self.sent.append(text)
+
+    bot = _Failing()
+    message = SimpleNamespace(
+        author=_Author(USER_ID), channel=SimpleNamespace(id=7), content="!sync"
+    )
+    asyncio.run(Supervisor.on_message(cast(Supervisor, bot), cast(discord.Message, message)))
+    assert bot.sent == ["Something went wrong handling that; please try again."]
+
+
+def test_failed_day_start_boundary_retries_next_tick() -> None:
+    class _Flaky:
+        config = SimpleNamespace(day_start=time(4, 0), day_end=time(23, 0))
+        _last_day_start: date | None = None
+        _last_day_end: date | None = None
+        calls = 0
+
+        async def _day_start(self, now: datetime) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient")
+
+        async def _day_end(self, now: datetime) -> None:
+            raise AssertionError("day end must not fire at 04:30")
+
+    bot = _Flaky()
+    now = datetime(2026, 7, 1, 4, 30, tzinfo=UTC)
+    with pytest.raises(RuntimeError):  # first attempt fails (the tick loop catches it)
+        asyncio.run(Supervisor._maybe_boundaries(cast(Supervisor, bot), now))
+    assert bot._last_day_start is None  # not marked done, so the next tick retries
+
+    asyncio.run(Supervisor._maybe_boundaries(cast(Supervisor, bot), now))
+    assert bot.calls == 2
+    assert bot._last_day_start == date(2026, 7, 1)  # only marked done on success
+
+    asyncio.run(Supervisor._maybe_boundaries(cast(Supervisor, bot), now))
+    assert bot.calls == 2  # done for the day; no third firing
 
 
 def test_recent_dialogue_honors_history_limit() -> None:
