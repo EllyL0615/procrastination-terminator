@@ -200,7 +200,7 @@ todo ─(到点)→ overdue ─(确认开始)→ started ─(确认完成)→ co
 | `!started <模糊 code>` | 把任务标记为 `started`，停止催开始 |
 | `!completed <模糊 code>` | 把任务标记为 `completed` |
 | `!sync` | 从 `plan.txt` 重新同步到 `progress.csv`：以 `code` 做集合对比，新增缺的、删除多的、匹配上的整行不动（见 3.1）；不归档。**同步成功后回一条成功消息，紧接着渲染当前表格（等同 `!progress`），好让我立刻看到结果**；解析报错（如 `code` 撞车）时只报错、不渲染 |
-| `!progress` | 把 `progress.csv` 渲染成表格发给我 |
+| `!progress` | 把 `progress.csv` 渲染成表格发给我：默认只出第一列（状态 emoji + 时间 + 任务）；`!progress detailed` 才多出第二列进度（`# 进度`）|
 | `!whattodo [模糊 code]` | 把任务拆成 3-5 个「马上能做」的小步(复用催开始的首次拆解,见 4.1),帮我迈出第一步;不带参 = 当前正处于时间窗内的任务,带参 = 我指代的那个任务(带 `notes` 一起考虑)。**只读,不改任何文件** |
 | `!modify` | 让 Bot 修改 `progress.csv`（删任务、改时间等；只动这一个文件）|
 | `!clear [N｜时长｜all]` | 删 Bot 自己发过的消息（不带参=最近 1 条；`N`=最近 N 条；`30m`/`2h`/`1d`=最近该时段内；`all`=全部）|

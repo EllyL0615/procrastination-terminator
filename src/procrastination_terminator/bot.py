@@ -30,7 +30,21 @@ from .storage import StorageBackend, build_backend
 _AWAITING = "awaiting reply"  # placeholder progress marker (SPEC §3.2 robustness)
 _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
 
-# Compact, fixed-ish status labels for the !progress table (SPEC §6).
+# ---- !progress table layout (SPEC §6) -- tweak these to change the display ----
+# Max display width of each column: the task name in column 1, and the progress
+# text in column 2. Longer text is truncated with "…". Bump these to show more.
+_TASK_WIDTH = 18
+_PROGRESS_WIDTH = 22
+
+# Status shown as an emoji in column 1. All four are East-Asian "wide" (display
+# width 2), so the time/task columns after them stay aligned whatever the status.
+_STATUS_EMOJI = {
+    Status.NOT_STARTED: "⬜",
+    Status.OVERDUE: "🟥",
+    Status.IN_PROGRESS: "🟨",
+    Status.COMPLETED: "✅",
+}
+
 _DISCORD_LIMIT = 2000  # max characters per message
 _TRUNCATE_MARK = "…"  # single-column per _disp_width (East-Asian "ambiguous"), and
 # Discord's monospace code block renders it narrow, so alignment still holds
@@ -365,7 +379,7 @@ class Supervisor(discord.Client):
                 await self._send("Synced plan.txt into progress.csv.")
                 await self._show_progress()  # show the result, else it is invisible
         elif name == "progress":
-            await self._show_progress()
+            await self._show_progress(detailed=arg.lower() == "detailed")
         elif name == "whattodo":
             await self._whattodo(arg)
         elif name == "modify":
@@ -616,63 +630,59 @@ class Supervisor(discord.Client):
                 return  # off-topic chat: leave the file untouched (SPEC §6)
             await self.store.upsert_changed([task])
 
-    # Column display widths for the !progress table (SPEC §6). TIME is the start time only.
-    _COLS = (("TIME", 5), ("TASK", 18), ("STATUS", 9), ("PROGRESS", 22))
-
-    async def _show_progress(self) -> None:
+    async def _show_progress(self, *, detailed: bool = False) -> None:
         """Send the rendered progress.csv table (SPEC §6); shared by !progress and !sync."""
-        for chunk in await self._render_table():
+        for chunk in await self._render_table(detailed):
             await self._send(chunk)
 
-    async def _render_table(self) -> list[str]:
-        """Render progress.csv as aligned monospace tables, split to fit Discord's limit.
+    async def _render_table(self, detailed: bool) -> list[str]:
+        """Render progress.csv as an aligned monospace table, split to fit Discord's limit.
 
-        Columns are date / planned_time / task / status / latest_progress. Returns one
-        or more messages (header repeated on each), each a fenced code block so the
-        columns stay aligned -- Discord does not render markdown tables (SPEC §6).
+        The first column is ``emoji start-time task`` (status shown as an emoji, task
+        padded to a fixed width so the columns line up). When ``detailed`` is set (the
+        ``!progress detailed`` form), a second column ``# latest_progress`` is added,
+        omitted per-row when that row has no progress; the bare ``!progress`` drops it
+        entirely. Returns one or more fenced code blocks -- Discord does not render
+        markdown tables, so the code fence keeps the monospace columns aligned (SPEC §6).
         """
         rows = await self.store.load_progress()
         if not rows:
             return ["progress.csv is empty."]
-        header = "  ".join(_fit(name, width) for name, width in self._COLS)
-        # Group by day with a blank line between days (rows are stored day-sorted; the
-        # date column was dropped, so the gap is what separates one day from the next).
+        # Group by day, each day led by its date on its own line (rows are stored
+        # day-sorted; the date column was dropped from the rows themselves).
         body: list[str] = []
         prev_date: str | None = None
         for t in rows:
-            if prev_date is not None and t.date != prev_date:
-                body.append("")
-            body.append(self._table_row(t))
+            if t.date != prev_date:
+                body.append(t.date)
+            body.append(self._table_row(t, detailed))
             prev_date = t.date
-        # Pack lines into fenced blocks under the char limit, repeating the header.
-        overhead = len(header) + len("```\n\n```\n") + 1
+        # Pack lines into fenced blocks under the char limit.
+        overhead = len("```\n\n```\n") + 1
         chunks: list[str] = []
         batch: list[str] = []
         size = 0
         for line in body:
             if batch and overhead + size + len(line) + 1 > _DISCORD_LIMIT:
-                chunks.append(self._fence(header, batch))
+                chunks.append(self._fence(batch))
                 batch, size = [], 0
             batch.append(line)
             size += len(line) + 1
         if batch:
-            chunks.append(self._fence(header, batch))
+            chunks.append(self._fence(batch))
         return chunks
 
-    def _table_row(self, t: Task) -> str:
-        values = (
-            t.planned_start,
-            t.description,
-            t.status.value,
-            t.latest_progress or "-",
-        )
-        return "  ".join(
-            _fit(value, width) for value, (_, width) in zip(values, self._COLS, strict=True)
-        )
+    def _table_row(self, t: Task, detailed: bool) -> str:
+        first = f"{_STATUS_EMOJI[t.status]} {t.planned_start}  {_fit(t.description, _TASK_WIDTH)}"
+        progress = (t.latest_progress or "").strip()
+        if not detailed or not progress:
+            return first
+        # Last column, so cap it at a max width but drop the padding _fit adds.
+        return f"{first}  # {_fit(progress, _PROGRESS_WIDTH).rstrip()}"
 
     @staticmethod
-    def _fence(header: str, lines: list[str]) -> str:
-        return "```\n" + header + "\n" + "\n".join(lines) + "\n```"
+    def _fence(lines: list[str]) -> str:
+        return "```\n" + "\n".join(lines) + "\n```"
 
     # -- outgoing ------------------------------------------------------------
 
