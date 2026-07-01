@@ -33,6 +33,20 @@ def test_database_properties_match_the_model() -> None:
     assert status_options == {s.value for s in Status}
 
 
+def test_database_select_options_carry_colors() -> None:
+    # Status colors mirror the !progress emoji semantics (⬜🟥🟨✅, SPEC §6).
+    props = _database_properties()
+    status_colors = {o["name"]: o["color"] for o in props["status"]["select"]["options"]}
+    type_colors = {o["name"]: o["color"] for o in props["type"]["select"]["options"]}
+    assert status_colors == {
+        "todo": "gray",
+        "overdue": "red",
+        "started": "orange",
+        "completed": "green",
+    }
+    assert type_colors == {"study": "blue", "work": "blue", "outing": "yellow", "other": "gray"}
+
+
 class _Recorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []

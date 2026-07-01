@@ -56,12 +56,32 @@ def _normalize_page_id(value: str) -> str:
     raise SystemExit(f"could not find a Notion page id in: {value!r}")
 
 
+# Select option colors (Notion's fixed palette). Status mirrors the !progress
+# emoji semantics (SPEC §6): ⬜ todo / 🟥 overdue / 🟨 started / ✅ completed.
+_TYPE_COLORS: dict[TaskType, str] = {
+    TaskType.STUDY: "blue",
+    TaskType.WORK: "blue",
+    TaskType.OUTING: "yellow",
+    TaskType.OTHER: "gray",
+}
+_STATUS_COLORS: dict[Status, str] = {
+    Status.NOT_STARTED: "gray",
+    Status.OVERDUE: "red",
+    Status.IN_PROGRESS: "orange",
+    Status.COMPLETED: "green",
+}
+
+
 def _database_properties() -> dict[str, Any]:
     """The tasks schema, derived from the model so it can't drift (SPEC §2, §9)."""
     props: dict[str, Any] = {name: {"rich_text": {}} for name in CSV_COLUMNS}
     props["code"] = {"title": {}}  # a database needs exactly one title property
-    props["type"] = {"select": {"options": [{"name": t.value} for t in TaskType]}}
-    props["status"] = {"select": {"options": [{"name": s.value} for s in Status]}}
+    props["type"] = {
+        "select": {"options": [{"name": t.value, "color": _TYPE_COLORS[t]} for t in TaskType]}
+    }
+    props["status"] = {
+        "select": {"options": [{"name": s.value, "color": _STATUS_COLORS[s]} for s in Status]}
+    }
     props["archived"] = {"checkbox": {}}
     return props
 
