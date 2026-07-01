@@ -15,22 +15,36 @@ import random
 import re
 import unicodedata
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 
 import discord
 from discord.ext import tasks as discord_tasks
 
-from . import daytime, store, tone
+from . import daytime, tone
 from .config import Config, PersonalityGranularity
 from .llm import LLMClient
 from .models import Personality, Status, Task, TaskType
 from .monitor import Action, decide
 from .plan_parser import DuplicateCodeError, build_tasks, diff_sync, parse_plan_text
+from .storage import StorageBackend, build_backend
 
 _AWAITING = "awaiting reply"  # placeholder progress marker (SPEC §3.2 robustness)
 _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
 
-# Compact, fixed-ish status labels for the !progress table (SPEC §6).
+# ---- !progress table layout (SPEC §6) -- tweak these to change the display ----
+# Max display width of each column: the task name in column 1, and the progress
+# text in column 2. Longer text is truncated with "…". Bump these to show more.
+_TASK_WIDTH = 18
+_PROGRESS_WIDTH = 22
+
+# Status shown as an emoji in column 1. All four are East-Asian "wide" (display
+# width 2), so the time/task columns after them stay aligned whatever the status.
+_STATUS_EMOJI = {
+    Status.NOT_STARTED: "⬜",
+    Status.OVERDUE: "🟥",
+    Status.IN_PROGRESS: "🟨",
+    Status.COMPLETED: "✅",
+}
+
 _DISCORD_LIMIT = 2000  # max characters per message
 _TRUNCATE_MARK = "…"  # single-column per _disp_width (East-Asian "ambiguous"), and
 # Discord's monospace code block renders it narrow, so alignment still holds
@@ -140,16 +154,19 @@ class Supervisor(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.config = config
-        self.llm = LLMClient(config)
+        self.store: StorageBackend = build_backend(config)
+        self.llm = LLMClient(config, context_provider=self.store.current_context)
         self._last_day_start: date | None = None
         self._last_day_end: date | None = None
 
     async def setup_hook(self) -> None:
+        await self.store.refresh_context()  # prime the standing-context cache (SPEC §2)
         self.tick.change_interval(seconds=self.config.poll_seconds)
         self.tick.start()
 
     async def close(self) -> None:
         await self.llm.aclose()
+        await self.store.aclose()
         await super().close()
 
     # -- the supervisor loop -------------------------------------------------
@@ -166,7 +183,7 @@ class Supervisor(discord.Client):
 
     async def _supervise(self, now: datetime) -> None:
         today = daytime.logical_day_of(now, self.config.day_start)
-        resolved = self._resolve_day(now, today)
+        resolved = await self._resolve_day(now, today)
         if not resolved:
             return
         last_code = resolved[-1][0].code
@@ -194,14 +211,14 @@ class Supervisor(discord.Client):
         if situations and lead is not None:
             await self._say(situations, lead, today, intensity=tone.intensity_for(lead_delay))
         if changed:
-            store.upsert_changed(
-                self.config.progress_path, list(changed.values()), self.config.day_start
-            )
+            await self.store.upsert_changed(list(changed.values()))
 
-    def _resolve_day(self, now: datetime, today: date) -> list[tuple[Task, datetime, datetime]]:
+    async def _resolve_day(
+        self, now: datetime, today: date
+    ) -> list[tuple[Task, datetime, datetime]]:
         """Today's tasks with absolute start/end, ordered by start."""
         resolved: list[tuple[Task, datetime, datetime]] = []
-        for task in store.load(self.config.progress_path):
+        for task in await self.store.load_progress():
             if daytime.date_from_md(task.date, now.date()) != today:
                 continue
             try:
@@ -214,7 +231,7 @@ class Supervisor(discord.Client):
             except ValueError:
                 continue
             resolved.append((task, start, end))
-        resolved.sort(key=lambda row: row[1])
+        resolved.sort(key=lambda row: row[0].code)  # code encodes logical-day order (SPEC §2)
         return resolved
 
     def _apply(
@@ -286,18 +303,14 @@ class Supervisor(discord.Client):
             await self._day_end(now)
 
     async def _day_start(self, now: datetime) -> None:
+        await self.store.refresh_context()  # once a day is enough for standing context
         today_md = _md(daytime.logical_day_of(now, self.config.day_start))
-        store.archive_past(
-            self.config.progress_path,
-            self.config.history_path,
-            today_md,
-            self.config.day_start,
-        )
+        await self.store.archive_past(today_md)
         await self._sync_plan(now)
 
     async def _day_end(self, now: datetime) -> None:
         today_md = _md(daytime.logical_day_of(now, self.config.day_start))
-        tasks = [t for t in store.load(self.config.progress_path) if t.date == today_md]
+        tasks = [t for t in await self.store.load_progress() if t.date == today_md]
         done = [t.description for t in tasks if t.status is Status.COMPLETED]
         pending = [
             t.description
@@ -312,8 +325,7 @@ class Supervisor(discord.Client):
 
     async def _sync_plan(self, now: datetime) -> bool:
         """Sync plan.txt into progress.csv; return False only if it bailed on an error."""
-        plan_file = Path(self.config.plan_path)
-        text = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
+        text = await self.store.read_plan()
         entries = parse_plan_text(text)  # deterministic backbone (SPEC §2)
         if entries:
             annotations = await self.llm.annotate_plan(text, entries)
@@ -325,7 +337,7 @@ class Supervisor(discord.Client):
             await self._send(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
             return False
         today = _md(daytime.logical_day_of(now, self.config.day_start))
-        existing = store.load(self.config.progress_path)
+        existing = await self.store.load_progress()
         plan = diff_sync(existing, parsed, today)
         # plan.txt owns the notes column: refresh it on matched rows too, leaving all
         # runtime state untouched -- the one exception to "matched rows stay" (SPEC §3.1).
@@ -339,11 +351,7 @@ class Supervisor(discord.Client):
         if not plan.to_add and not plan.to_delete and not notes_changed:
             return True
         removed = set(plan.to_delete)
-        store.write_all(
-            self.config.progress_path,
-            [t for t in existing if t.code not in removed] + plan.to_add,
-            self.config.day_start,
-        )
+        await self.store.write_all([t for t in existing if t.code not in removed] + plan.to_add)
         return True
 
     # -- incoming messages ---------------------------------------------------
@@ -371,20 +379,22 @@ class Supervisor(discord.Client):
                 await self._send("Synced plan.txt into progress.csv.")
                 await self._show_progress()  # show the result, else it is invisible
         elif name == "progress":
-            await self._show_progress()
+            await self._show_progress(detailed=arg.lower() == "detailed")
         elif name == "whattodo":
             await self._whattodo(arg)
         elif name == "modify":
             await self._modify(arg)
         elif name == "clear":
             await self._clear(arg)
+        elif name == "reloadcontext":
+            await self._reload_context()
         elif name == "tick":
             await self._debug_tick(arg)
         else:
             await self._send(f"Unknown command: !{name}")
 
     async def _mark(self, fuzzy: str, status: Status) -> None:
-        tasks = store.load(self.config.progress_path)
+        tasks = await self.store.load_progress()
         active = [t for t in tasks if t.type in _NAGGED_TYPES and t.status is not Status.COMPLETED]
         match = await self.llm.match_code(active, fuzzy)
         if match is None:
@@ -398,7 +408,7 @@ class Supervisor(discord.Client):
         else:
             match.status = Status.COMPLETED
             match.actual_end = _now_clock(now)
-        store.upsert_changed(self.config.progress_path, [match])
+        await self.store.upsert_changed([match])
         await self._send(f"Marked '{match.description}' as {status.value}.")
 
     async def _whattodo(self, fuzzy: str) -> None:
@@ -411,13 +421,13 @@ class Supervisor(discord.Client):
         now = datetime.now(self.config.tz)
         today = daytime.logical_day_of(now, self.config.day_start)
         if fuzzy:
-            tasks = [t for t in store.load(self.config.progress_path) if t.type in _NAGGED_TYPES]
+            tasks = [t for t in await self.store.load_progress() if t.type in _NAGGED_TYPES]
             task = await self.llm.match_code(tasks, fuzzy)
             if task is None:
                 await self._send("Which task do you mean? Try `!whattodo <code>`.")
                 return
         else:
-            task = self._current_task(now, today)
+            task = await self._current_task(now, today)
             if task is None:
                 await self._send(
                     "No study/work task is active right now -- name one: `!whattodo <code>`."
@@ -430,14 +440,14 @@ class Supervisor(discord.Client):
         )
         await self._say([situation], task, today)
 
-    def _current_task(self, now: datetime, today: date) -> Task | None:
+    async def _current_task(self, now: datetime, today: date) -> Task | None:
         """The nagged task whose planned window contains ``now``, if any (SPEC §4.1)."""
-        for task, start, end in self._resolve_day(now, today):
+        for task, start, end in await self._resolve_day(now, today):
             if task.type in _NAGGED_TYPES and start <= now < end:
                 return task
         return None
 
-    def _live_candidates(self, now: datetime) -> list[Task]:
+    async def _live_candidates(self, now: datetime) -> list[Task]:
         """Study/work tasks a free-chat reply could be about right now (SPEC §4.4).
 
         A task is a candidate while it is overdue or in_progress AND either still in
@@ -450,7 +460,7 @@ class Supervisor(discord.Client):
         """
         today = daytime.logical_day_of(now, self.config.day_start)
         candidates: list[Task] = []
-        for task, _start, end in self._resolve_day(now, today):
+        for task, _start, end in await self._resolve_day(now, today):
             if task.type not in _NAGGED_TYPES or task.status not in (
                 Status.OVERDUE,
                 Status.IN_PROGRESS,
@@ -468,7 +478,7 @@ class Supervisor(discord.Client):
         pure chat.
         """
         now = datetime.now(self.config.tz)
-        candidates = self._live_candidates(now)
+        candidates = await self._live_candidates(now)
         target: Task | None = candidates[0] if len(candidates) == 1 else None
         if len(candidates) > 1:
             target = await self.llm.match_code(candidates, content)
@@ -488,7 +498,7 @@ class Supervisor(discord.Client):
         if not instruction:
             await self._send("Tell me what to change, e.g. `!modify move RUN to 19:00`.")
             return
-        tasks = store.load(self.config.progress_path)
+        tasks = await self.store.load_progress()
         by_code = {t.code: t for t in tasks}
         deleted: set[str] = set()
         touched: list[Task] = []
@@ -507,10 +517,20 @@ class Supervisor(discord.Client):
             return
         if deleted:
             kept = [t for t in tasks if t.code not in deleted]
-            store.write_all(self.config.progress_path, kept, self.config.day_start)
+            await self.store.write_all(kept)
         elif touched:
-            store.upsert_changed(self.config.progress_path, touched, self.config.day_start)
+            await self.store.upsert_changed(touched)
         await self._send(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
+
+    async def _reload_context(self) -> None:
+        """Reload the standing context (glossary/tone) from its source (SPEC §2, §4.5).
+
+        The context is cached and normally refreshed only at startup / day-start; this
+        lets the user apply an edit immediately. A no-op for the file backend, which
+        reads the file live on every message.
+        """
+        await self.store.refresh_context()
+        await self._send("Reloaded context.")
 
     async def _clear(self, arg: str) -> None:
         """Delete the bot's own messages in the channel (SPEC §6).
@@ -595,7 +615,7 @@ class Supervisor(discord.Client):
                 task.status = Status.IN_PROGRESS
                 task.actual_start = _now_clock(now)
                 task.latest_progress_time = now.isoformat()
-                store.upsert_changed(self.config.progress_path, [task])
+                await self.store.upsert_changed([task])
         elif task.status is Status.IN_PROGRESS:
             kind = await self.llm.classify_progress_reply(task, content)
             if kind == "completed":
@@ -608,65 +628,66 @@ class Supervisor(discord.Client):
                 task.latest_progress_time = now.isoformat()
             else:
                 return  # off-topic chat: leave the file untouched (SPEC §6)
-            store.upsert_changed(self.config.progress_path, [task])
+            await self.store.upsert_changed([task])
 
-    # Column display widths for the !progress table (SPEC §6). TIME is the start time only.
-    _COLS = (("TIME", 5), ("TASK", 18), ("STATUS", 9), ("PROGRESS", 22))
-
-    async def _show_progress(self) -> None:
+    async def _show_progress(self, *, detailed: bool = False) -> None:
         """Send the rendered progress.csv table (SPEC §6); shared by !progress and !sync."""
-        for chunk in self._render_table():
+        for chunk in await self._render_table(detailed):
             await self._send(chunk)
 
-    def _render_table(self) -> list[str]:
-        """Render progress.csv as aligned monospace tables, split to fit Discord's limit.
+    async def _render_table(self, detailed: bool) -> list[str]:
+        """Render progress.csv as an aligned monospace table, split to fit Discord's limit.
 
-        Columns are date / planned_time / task / status / latest_progress. Returns one
-        or more messages (header repeated on each), each a fenced code block so the
-        columns stay aligned -- Discord does not render markdown tables (SPEC §6).
+        The first column is ``emoji start-time task`` (status shown as an emoji, task
+        padded to a fixed width so the columns line up). When ``detailed`` is set (the
+        ``!progress detailed`` form), a second column ``# latest_progress`` is added,
+        omitted per-row when that row has no progress; the bare ``!progress`` drops it
+        entirely. Returns one or more fenced code blocks -- Discord does not render
+        markdown tables, so the code fence keeps the monospace columns aligned (SPEC §6).
         """
-        rows = store.load(self.config.progress_path)
+        rows = await self.store.load_progress()
         if not rows:
             return ["progress.csv is empty."]
-        header = "  ".join(_fit(name, width) for name, width in self._COLS)
-        # Group by day with a blank line between days (rows are stored day-sorted; the
-        # date column was dropped, so the gap is what separates one day from the next).
+        # Group by day, each day led by its date on its own line (rows are stored
+        # day-sorted; the date column was dropped from the rows themselves).
         body: list[str] = []
         prev_date: str | None = None
         for t in rows:
-            if prev_date is not None and t.date != prev_date:
-                body.append("")
-            body.append(self._table_row(t))
+            if t.date != prev_date:
+                body.append(t.date)
+            body.append(self._table_row(t, detailed))
             prev_date = t.date
-        # Pack lines into fenced blocks under the char limit, repeating the header.
-        overhead = len(header) + len("```\n\n```\n") + 1
+        # Pack lines into fenced blocks under the char limit.
+        overhead = len("```\n\n```\n") + 1
         chunks: list[str] = []
         batch: list[str] = []
         size = 0
         for line in body:
             if batch and overhead + size + len(line) + 1 > _DISCORD_LIMIT:
-                chunks.append(self._fence(header, batch))
+                chunks.append(self._fence(batch))
                 batch, size = [], 0
             batch.append(line)
             size += len(line) + 1
         if batch:
-            chunks.append(self._fence(header, batch))
+            chunks.append(self._fence(batch))
         return chunks
 
-    def _table_row(self, t: Task) -> str:
-        values = (
-            t.planned_start,
-            t.description,
-            t.status.value,
-            t.latest_progress or "-",
-        )
-        return "  ".join(
-            _fit(value, width) for value, (_, width) in zip(values, self._COLS, strict=True)
-        )
+    def _table_row(self, t: Task, detailed: bool) -> str:
+        prefix = f"{_STATUS_EMOJI[t.status]} {t.planned_start}  "
+        if not detailed:
+            # Single column: nothing lines up after the task, so show it in full.
+            return prefix + unicodedata.normalize("NFKC", t.description).replace("\n", " ")
+        # Detailed: pad the task to a fixed width so the progress column lines up.
+        first = prefix + _fit(t.description, _TASK_WIDTH)
+        progress = (t.latest_progress or "").strip()
+        if not progress:
+            return first
+        # Last column, so cap it at a max width but drop the padding _fit adds.
+        return f"{first}  # {_fit(progress, _PROGRESS_WIDTH).rstrip()}"
 
     @staticmethod
-    def _fence(header: str, lines: list[str]) -> str:
-        return "```\n" + header + "\n" + "\n".join(lines) + "\n```"
+    def _fence(lines: list[str]) -> str:
+        return "```\n" + "\n".join(lines) + "\n```"
 
     # -- outgoing ------------------------------------------------------------
 
@@ -704,6 +725,14 @@ class Supervisor(discord.Client):
         honor the user's in-conversation corrections. This grounds *wording* only; the
         monitor's decisions stay file+time based and memoryless (SPEC §3.2, §4.5). How
         many turns is ``config.dialogue_history_limit`` (env ``DIALOGUE_HISTORY``).
+
+        Each turn's send time is stamped into its ``content`` as a ``[MM-DD HH:MM]``
+        prefix -- the chat API carries only role/content, so the timestamp rides along
+        in the text. Times are converted from Discord's UTC ``created_at`` into
+        ``config.tz`` (same clock as the logical day) so the LLM reads them in the
+        user's timezone. This is wording context only: these timestamps must never
+        reach the monitor, whose timing stays snapshot+clock based (memoryless,
+        SPEC §3.2).
         """
         channel = await self._channel()
         turns: list[dict[str, str]] = []
@@ -712,7 +741,8 @@ class Supervisor(discord.Client):
             if not content:
                 continue
             role = "user" if message.author.id == self.config.discord_user_id else "assistant"
-            turns.append({"role": role, "content": content})
+            stamp = message.created_at.astimezone(self.config.tz).strftime("%m-%d %H:%M")
+            turns.append({"role": role, "content": f"[{stamp}] {content}"})
         turns.reverse()
         return turns
 

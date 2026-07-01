@@ -14,10 +14,8 @@ import csv
 import os
 import tempfile
 from collections.abc import Iterable
-from datetime import time
 from pathlib import Path
 
-from . import daytime
 from .models import CSV_COLUMNS, Status, Task, TaskType
 
 # Legacy status keywords -> current ones, so a progress.csv/history.csv written
@@ -75,25 +73,14 @@ def _from_row(row: dict[str, str]) -> Task:
     )
 
 
-def _order_key(row: dict[str, str], day_start: time) -> tuple[str, int]:
-    """Chronological sort key: ``(date, within-logical-day minutes of the start)``.
+def _sorted(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Return ``rows`` ordered by ``code`` (stable, so ties keep their order).
 
-    Keeps progress.csv ordered so an after-midnight task (e.g. 00:00 sleep) trails
-    the rest of its logical day rather than jumping to the top (SPEC §5). Defensive
-    against hand-edited rows: a missing/garbled ``planned_time`` sorts to the top of
-    its date instead of raising.
+    A task's ``code`` is ``date-time-subject`` with early-morning hours carried as
+    24-27 (SPEC §2), so plain ascending ``code`` order IS the logical-day order --
+    an after-midnight task sorts to the tail of its day, no time math needed.
     """
-    start, _ = _split_range(row.get("planned_time", ""))
-    minutes = 0
-    if start:
-        with contextlib.suppress(ValueError):
-            minutes = daytime.logical_order(daytime.parse_clock(start), day_start)
-    return (row.get("date", ""), minutes)
-
-
-def _sorted(rows: list[dict[str, str]], day_start: time) -> list[dict[str, str]]:
-    """Return ``rows`` chronologically ordered (stable, so ties keep their order)."""
-    return sorted(rows, key=lambda r: _order_key(r, day_start))
+    return sorted(rows, key=lambda r: r.get("code", ""))
 
 
 def _read_raw(file: Path) -> list[dict[str, str]]:
@@ -136,12 +123,12 @@ def load(path: str) -> list[Task]:
     return [_from_row(row) for row in _read_raw(Path(path))]
 
 
-def write_all(path: str, tasks: list[Task], day_start: time = time(4, 0)) -> None:
+def write_all(path: str, tasks: list[Task]) -> None:
     """Replace the whole file with ``tasks`` (used by sync, which deletes rows)."""
-    _write_atomic(Path(path), _sorted([_to_row(t) for t in tasks], day_start))
+    _write_atomic(Path(path), _sorted([_to_row(t) for t in tasks]))
 
 
-def upsert_changed(path: str, changed: Iterable[Task], day_start: time = time(4, 0)) -> None:
+def upsert_changed(path: str, changed: Iterable[Task]) -> None:
     """Re-read ``path`` and write back only the given changed rows (A6).
 
     Rows not in ``changed`` are written back verbatim from the fresh read, so a
@@ -164,14 +151,13 @@ def upsert_changed(path: str, changed: Iterable[Task], day_start: time = time(4,
             rows.append(row)
         else:
             rows[pos] = row
-    _write_atomic(file, _sorted(rows, day_start))
+    _write_atomic(file, _sorted(rows))
 
 
 def archive_past(
     progress_path: str,
     history_path: str,
     current_logical_day: str,
-    day_start: time = time(4, 0),
 ) -> None:
     """Move rows older than the current logical day into history.csv (SPEC §3.1, B3).
 
@@ -189,4 +175,4 @@ def archive_past(
     kept = [r for r in rows if r["date"] >= current_logical_day]
     history = Path(history_path)
     _write_atomic(history, _read_raw(history) + past)
-    _write_atomic(progress, _sorted(kept, day_start))
+    _write_atomic(progress, _sorted(kept))

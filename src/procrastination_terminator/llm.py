@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Literal
 
 import httpx
@@ -46,8 +46,9 @@ def _extract_json(content: str) -> dict[str, Any]:
 class LLMClient:
     """Thin async wrapper over an OpenAI-compatible chat-completions endpoint."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, context_provider: Callable[[], str]) -> None:
         self._config = config
+        self._context_provider = context_provider
         self._http = httpx.AsyncClient(
             base_url=config.llm_base_url,
             headers={"Authorization": f"Bearer {config.llm_api_key}"},
@@ -55,11 +56,8 @@ class LLMClient:
         )
 
     def _user_context(self) -> str:
-        """Read the user's free-form context file, or '' if absent (SPEC §2)."""
-        try:
-            return Path(self._config.context_path).read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            return ""
+        """The user's standing context (glossary/tone), '' if none (SPEC §2, §4.5)."""
+        return self._context_provider().strip()
 
     def _augment(self, system: str) -> str:
         """Fold the user's standing context into a system prompt (SPEC §4.5).

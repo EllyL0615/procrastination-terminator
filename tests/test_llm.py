@@ -1,13 +1,15 @@
 """Tests for the pure LLM-output parsing helper and the user-context injection.
 
 The HTTP calls themselves are IO (SPEC §9); here we pin the JSON parsing and the
-``context.txt`` folding done in ``_augment`` (SPEC §2, §4.5) -- both pure/local.
+standing-context folding done in ``_augment`` (SPEC §2, §4.5) -- both pure/local.
+The context now arrives from an injected provider (the storage backend); reading
+it from a file is covered in test_file_backend.
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from collections.abc import Callable
 
 import pytest
 
@@ -36,8 +38,8 @@ def test_non_object_rejected() -> None:
         _extract_json("[1, 2, 3]")
 
 
-def _client_reading(context_path: Path) -> LLMClient:
-    """An LLMClient whose only exercised knob is where context.txt lives."""
+def _client(context: Callable[[], str]) -> LLMClient:
+    """An LLMClient whose only exercised knob is the injected context provider."""
     config = Config(
         discord_token="t",
         discord_user_id=1,
@@ -45,15 +47,12 @@ def _client_reading(context_path: Path) -> LLMClient:
         llm_api_key="k",
         llm_base_url="http://localhost",
         llm_model="m",
-        context_path=str(context_path),
     )
-    return LLMClient(config)
+    return LLMClient(config, context_provider=context)
 
 
-def test_augment_appends_user_context(tmp_path: Path) -> None:
-    context = tmp_path / "context.txt"
-    context.write_text("Game = 博弈论课程", encoding="utf-8")
-    client = _client_reading(context)
+def test_augment_appends_user_context() -> None:
+    client = _client(lambda: "Game = 博弈论课程")
     try:
         result = client._augment("TASK RULES")
     finally:
@@ -62,18 +61,16 @@ def test_augment_appends_user_context(tmp_path: Path) -> None:
     assert "Game = 博弈论课程" in result
 
 
-def test_augment_is_noop_without_context_file(tmp_path: Path) -> None:
-    client = _client_reading(tmp_path / "missing.txt")
+def test_augment_is_noop_without_context() -> None:
+    client = _client(lambda: "")
     try:
         assert client._augment("TASK RULES") == "TASK RULES"
     finally:
         asyncio.run(client.aclose())
 
 
-def test_augment_is_noop_when_context_blank(tmp_path: Path) -> None:
-    context = tmp_path / "context.txt"
-    context.write_text("  \n\t\n", encoding="utf-8")
-    client = _client_reading(context)
+def test_augment_is_noop_when_context_blank() -> None:
+    client = _client(lambda: "  \n\t\n")
     try:
         assert client._augment("TASK RULES") == "TASK RULES"
     finally:
