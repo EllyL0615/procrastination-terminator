@@ -9,6 +9,7 @@ join, the context cache, and the 429 retry.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 from typing import Any
 
@@ -247,7 +248,7 @@ def test_archive_past_flips_checkbox_out_of_working_set() -> None:
             await backend.upsert_changed(
                 [_task("0630-1400-OLD", "06.30"), _task("0701-1400-GAME", "07.01")]
             )
-            await backend.archive_past("07.01")
+            await backend.archive_past(datetime.date(2026, 7, 1))
             return [t.code for t in await backend.load_progress()]
         finally:
             await backend.aclose()

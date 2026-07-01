@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, time
 
 from . import daytime
 from .models import Status, Task, TaskType
@@ -158,14 +158,21 @@ def build_tasks(entries: list[dict[str, str]], day_start: time = time(4, 0)) -> 
     return tasks
 
 
-def diff_sync(existing: list[Task], parsed: list[Task], today: str) -> SyncPlan:
+def diff_sync(existing: list[Task], parsed: list[Task], today: date) -> SyncPlan:
     """Set-diff by code over today-and-future rows.
 
-    ``today`` is the current logical day's ``date`` value (e.g. ``"03.13"``).
-    Rows dated before it are out of scope: never added, deleted, or reported.
+    ``today`` is the current logical day. Rows dated before it are out of scope:
+    never added, deleted, or reported. A row's yearless ``MM.DD`` is resolved to
+    the calendar date closest to ``today`` (not compared lexically), so the scope
+    stays correct across the year boundary -- on Jan 1 a ``12.31`` row is
+    yesterday, not eleven months in the future.
     """
-    existing_in_scope = {t.code: t for t in existing if t.date >= today}
-    parsed_in_scope = {t.code: t for t in parsed if t.date >= today}
+
+    def in_scope(task: Task) -> bool:
+        return daytime.date_from_md(task.date, today) >= today
+
+    existing_in_scope = {t.code: t for t in existing if in_scope(t)}
+    parsed_in_scope = {t.code: t for t in parsed if in_scope(t)}
     to_add = [t for code, t in parsed_in_scope.items() if code not in existing_in_scope]
     to_delete = [code for code in existing_in_scope if code not in parsed_in_scope]
     kept = [t for code, t in existing_in_scope.items() if code in parsed_in_scope]

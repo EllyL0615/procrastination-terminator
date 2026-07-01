@@ -11,6 +11,7 @@ sync store functions are called directly.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
 from pathlib import Path
 
 from .. import store
@@ -36,8 +37,8 @@ class FileBackend:
     async def write_all(self, tasks: list[Task]) -> None:
         store.write_all(self._progress_path, tasks)
 
-    async def archive_past(self, current_logical_day: str) -> None:
-        store.archive_past(self._progress_path, self._history_path, current_logical_day)
+    async def archive_past(self, today: date) -> None:
+        store.archive_past(self._progress_path, self._history_path, today)
 
     async def read_plan(self) -> str:
         path = Path(self._plan_path)

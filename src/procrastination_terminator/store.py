@@ -14,8 +14,10 @@ import csv
 import os
 import tempfile
 from collections.abc import Iterable
+from datetime import date
 from pathlib import Path
 
+from . import daytime
 from .models import CSV_COLUMNS, Status, Task, TaskType
 
 # Legacy status keywords -> current ones, so a progress.csv/history.csv written
@@ -157,22 +159,22 @@ def upsert_changed(path: str, changed: Iterable[Task]) -> None:
 def archive_past(
     progress_path: str,
     history_path: str,
-    current_logical_day: str,
+    today: date,
 ) -> None:
     """Move rows older than the current logical day into history.csv (SPEC §3.1, B3).
 
-    ``current_logical_day`` is a ``date`` column value (e.g. ``"03.13"``); rows
-    whose ``date`` sorts before it are archived. Comparison is lexical, which
-    assumes the retained window stays within one year (``MM.DD`` carries no year).
-    History is appended first, then progress is trimmed, so a crash never drops a
-    row (at worst it is archived twice).
+    ``today`` is the current logical day. A row's yearless ``MM.DD`` date is
+    resolved to the calendar date closest to ``today`` (not compared lexically),
+    so archiving survives the year boundary: on Jan 1 the ``12.31`` rows are one
+    day old, not eleven months ahead. History is appended first, then progress is
+    trimmed, so a crash never drops a row (at worst it is archived twice).
     """
     progress = Path(progress_path)
     rows = _read_raw(progress)
-    past = [r for r in rows if r["date"] < current_logical_day]
+    past = [r for r in rows if daytime.date_from_md(r["date"], today) < today]
     if not past:
         return
-    kept = [r for r in rows if r["date"] >= current_logical_day]
+    kept = [r for r in rows if daytime.date_from_md(r["date"], today) >= today]
     history = Path(history_path)
     _write_atomic(history, _read_raw(history) + past)
     _write_atomic(progress, _sorted(kept))

@@ -18,6 +18,7 @@ the file each call.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from ..models import Task
@@ -37,8 +38,8 @@ class StorageBackend(Protocol):
         """Replace the whole progress set with ``tasks`` (used by sync/modify deletes)."""
         ...
 
-    async def archive_past(self, current_logical_day: str) -> None:
-        """Move rows dated before ``current_logical_day`` out of the working set."""
+    async def archive_past(self, today: date) -> None:
+        """Move rows dated before the logical day ``today`` out of the working set."""
         ...
 
     async def read_plan(self) -> str:

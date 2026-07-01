@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from procrastination_terminator.models import Status, Task, TaskType
@@ -34,7 +36,7 @@ def test_add_missing_delete_extra_keep_matched() -> None:
     existing = [task("0313-1400-PGM", "03.13"), task("0313-1800-RUN", "03.13")]
     parsed = [task("0313-1400-PGM", "03.13"), task("0313-2000-EAT", "03.13")]
 
-    plan = diff_sync(existing, parsed, "03.13")
+    plan = diff_sync(existing, parsed, datetime.date(2026, 3, 13))
 
     assert [t.code for t in plan.to_add] == ["0313-2000-EAT"]
     assert plan.to_delete == ["0313-1800-RUN"]
@@ -46,7 +48,7 @@ def test_matched_row_keeps_existing_state_not_parsed() -> None:
     existing = [task("0313-1400-PGM", "03.13", status=Status.IN_PROGRESS)]
     parsed = [task("0313-1400-PGM", "03.13", status=Status.NOT_STARTED)]
 
-    plan = diff_sync(existing, parsed, "03.13")
+    plan = diff_sync(existing, parsed, datetime.date(2026, 3, 13))
 
     assert plan.kept[0].status is Status.IN_PROGRESS
     assert plan.to_add == []
@@ -57,7 +59,7 @@ def test_pre_today_rows_are_out_of_scope() -> None:
     existing = [task("0312-1400-PGM", "03.12"), task("0313-1400-PGM", "03.13")]
     parsed = [task("0314-0900-GYM", "03.14")]  # only a future task in the plan
 
-    plan = diff_sync(existing, parsed, "03.13")
+    plan = diff_sync(existing, parsed, datetime.date(2026, 3, 13))
 
     # Yesterday's row is neither deleted nor reported; only today's gets deleted.
     assert plan.to_delete == ["0313-1400-PGM"]
@@ -66,8 +68,22 @@ def test_pre_today_rows_are_out_of_scope() -> None:
 
 
 def test_past_tasks_in_plan_are_ignored() -> None:
-    plan = diff_sync([], [task("0312-1400-PGM", "03.12")], "03.13")
+    plan = diff_sync([], [task("0312-1400-PGM", "03.12")], datetime.date(2026, 3, 13))
     assert plan.to_add == []
+
+
+def test_diff_sync_treats_december_rows_as_past_on_new_years_day() -> None:
+    # Year-wrap regression: lexically "12.31" >= "01.01", so a naive string compare
+    # would pull yesterday's rows into scope on Jan 1 and delete them (instead of
+    # leaving them for the archiver). MM.DD must resolve to the date closest to today.
+    existing = [task("1231-1400-PGM", "12.31"), task("0101-1400-PGM", "01.01")]
+    parsed = [task("0101-1400-PGM", "01.01")]  # the plan no longer lists 12.31
+
+    plan = diff_sync(existing, parsed, datetime.date(2027, 1, 1))
+
+    assert plan.to_delete == []  # the 12.31 row is yesterday's, out of scope
+    assert plan.to_add == []
+    assert [t.code for t in plan.kept] == ["0101-1400-PGM"]
 
 
 def test_find_duplicate_codes() -> None:

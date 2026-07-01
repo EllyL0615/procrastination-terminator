@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from datetime import date
 from typing import Any
 
 import httpx
 
+from .. import daytime
 from ..config import Config
 from ..models import Status, Task, TaskType
 from ..store import _join_range, _split_range
@@ -93,9 +95,11 @@ class NotionBackend:
             if code not in target:  # dropped from the plan: trash the page (recoverable)
                 await self._request("PATCH", f"/pages/{page_id}", json={"archived": True})
 
-    async def archive_past(self, current_logical_day: str) -> None:
+    async def archive_past(self, today: date) -> None:
+        # Resolve each row's yearless MM.DD to the calendar date closest to today
+        # (as store.archive_past does), so archiving survives the year boundary.
         for page in await self._query_active_pages():
-            if self._rich(page["properties"], "date") < current_logical_day:
+            if daytime.date_from_md(self._rich(page["properties"], "date"), today) < today:
                 await self._request(
                     "PATCH",
                     f"/pages/{page['id']}",

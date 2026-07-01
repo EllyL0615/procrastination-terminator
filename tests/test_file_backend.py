@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 from pathlib import Path
 
 from procrastination_terminator import store
@@ -90,7 +91,7 @@ def test_archive_past_moves_old_rows_to_history(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     backend = FileBackend(cfg)
     asyncio.run(backend.upsert_changed([_task("0630-1400-OLD", "06.30"), _task()]))
-    asyncio.run(backend.archive_past("07.01"))
+    asyncio.run(backend.archive_past(datetime.date(2026, 7, 1)))
     remaining = asyncio.run(backend.load_progress())
     assert [t.code for t in remaining] == ["0701-1400-GAME"]
     assert [t.code for t in store.load(cfg.history_path)] == ["0630-1400-OLD"]

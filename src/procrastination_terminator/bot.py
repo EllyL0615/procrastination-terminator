@@ -328,8 +328,7 @@ class Supervisor(discord.Client):
 
     async def _day_start(self, now: datetime) -> None:
         await self.store.refresh_context()  # once a day is enough for standing context
-        today_md = _md(daytime.logical_day_of(now, self.config.day_start))
-        await self.store.archive_past(today_md)
+        await self.store.archive_past(daytime.logical_day_of(now, self.config.day_start))
         await self._sync_plan(now)
 
     async def _day_end(self, now: datetime) -> None:
@@ -360,12 +359,14 @@ class Supervisor(discord.Client):
         except DuplicateCodeError as exc:
             await self._send(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
             return False
-        today = _md(daytime.logical_day_of(now, self.config.day_start))
+        today = daytime.logical_day_of(now, self.config.day_start)
         existing = await self.store.load_progress()
         plan = diff_sync(existing, parsed, today)
         # plan.txt owns the notes column: refresh it on matched rows too, leaving all
         # runtime state untouched -- the one exception to "matched rows stay" (SPEC §3.1).
-        parsed_notes = {t.code: t.notes for t in parsed if t.date >= today}
+        parsed_notes = {
+            t.code: t.notes for t in parsed if daytime.date_from_md(t.date, today) >= today
+        }
         notes_changed = False
         for task in existing:
             fresh = parsed_notes.get(task.code)

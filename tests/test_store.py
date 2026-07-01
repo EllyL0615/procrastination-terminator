@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 from procrastination_terminator import store
@@ -157,7 +158,7 @@ def test_archive_past_moves_old_rows(tmp_path: Path) -> None:
     tomorrow = task("0314-1400-PGM", "03.14")
     store.upsert_changed(progress, [yesterday, today, tomorrow])
 
-    store.archive_past(progress, history, "03.13")
+    store.archive_past(progress, history, datetime.date(2026, 3, 13))
 
     assert store.load(progress) == [today, tomorrow]
     assert store.load(history) == [yesterday]
@@ -170,7 +171,7 @@ def test_archive_past_appends_to_existing_history(tmp_path: Path) -> None:
     store.upsert_changed(history, [older])
     store.upsert_changed(progress, [task("0312-1400-PGM", "03.12"), task("0313-1400-PGM", "03.13")])
 
-    store.archive_past(progress, history, "03.13")
+    store.archive_past(progress, history, datetime.date(2026, 3, 13))
 
     assert [t.code for t in store.load(history)] == ["0311-1400-PGM", "0312-1400-PGM"]
     assert [t.code for t in store.load(progress)] == ["0313-1400-PGM"]
@@ -181,7 +182,23 @@ def test_archive_past_noop_when_nothing_old(tmp_path: Path) -> None:
     history = str(tmp_path / "history.csv")
     store.upsert_changed(progress, [task("0313-1400-PGM", "03.13")])
 
-    store.archive_past(progress, history, "03.13")
+    store.archive_past(progress, history, datetime.date(2026, 3, 13))
 
     assert [t.code for t in store.load(progress)] == ["0313-1400-PGM"]
     assert store.load(history) == []
+
+
+def test_archive_past_moves_december_rows_on_new_years_day(tmp_path: Path) -> None:
+    # Year-wrap regression: lexically "12.31" > "01.01", so a naive string compare
+    # would keep December rows in progress.csv forever. MM.DD must resolve to the
+    # calendar date closest to today, making the 12.31 row one day old on Jan 1.
+    progress = str(tmp_path / "progress.csv")
+    history = str(tmp_path / "history.csv")
+    new_years_eve = task("1231-1400-PGM", "12.31", status=Status.COMPLETED)
+    new_years_day = task("0101-1400-PGM", "01.01")
+    store.upsert_changed(progress, [new_years_eve, new_years_day])
+
+    store.archive_past(progress, history, datetime.date(2027, 1, 1))
+
+    assert store.load(progress) == [new_years_day]
+    assert store.load(history) == [new_years_eve]
