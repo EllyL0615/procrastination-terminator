@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 import re
+import unicodedata
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -29,10 +30,50 @@ from .plan_parser import DuplicateCodeError, build_tasks, diff_sync
 _AWAITING = "awaiting reply"  # placeholder progress marker (SPEC §3.2 robustness)
 _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
 
+# Compact, fixed-ish status labels for the !progress table (SPEC §6).
+_STATUS_LABEL = {
+    Status.NOT_STARTED: "todo",
+    Status.OVERDUE: "overdue",
+    Status.IN_PROGRESS: "doing",
+    Status.COMPLETED: "done",
+}
+_DISCORD_LIMIT = 2000  # max characters per message
+_TRUNCATE_MARK = "~"  # ASCII, so its width is stable across fonts (unlike "…")
+
+
+def _disp_width(text: str) -> int:
+    """Monospace display width: East-Asian wide/fullwidth glyphs occupy two columns."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
+
+def _fit(text: str, width: int) -> str:
+    """Truncate ``text`` to ``width`` display columns (``~`` if cut), then right-pad.
+
+    ``text`` is NFKC-normalized first, folding fullwidth punctuation (fullwidth parens,
+    colon, etc.) to their ASCII forms: many monospace fonts draw fullwidth *punctuation*
+    narrower than a full CJK cell, which knocks the columns out of alignment even though
+    its Unicode width is 2. After folding, only reliably-1 (ASCII) and reliably-2 (CJK)
+    glyphs remain. Alignment is by display width, not code points, so CJK task names line
+    up inside a monospace code block -- Discord won't render a real markdown table (§6).
+    """
+    text = unicodedata.normalize("NFKC", text).replace("\n", " ")
+    out, used, truncated = "", 0, False
+    for ch in text:
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if used + w > width:
+            truncated = True
+            break
+        out, used = out + ch, used + w
+    if truncated:
+        while used > width - 1:  # free one column for the truncation mark
+            out, used = out[:-1], used - _disp_width(out[-1])
+        out = out.rstrip(" ")  # no dangling space before the mark
+        out, used = out + _TRUNCATE_MARK, _disp_width(out) + 1
+    return out + " " * (width - used)
+
 
 def _parse_clock(value: str) -> time:
-    hour, minute = value.split(":")
-    return time(int(hour), int(minute))
+    return daytime.parse_clock(value)
 
 
 def _md(day: date) -> str:
@@ -143,7 +184,9 @@ class Supervisor(discord.Client):
         if situations and lead is not None:
             await self._say(situations, lead, today, intensity=tone.intensity_for(lead_delay))
         if changed:
-            store.upsert_changed(self.config.progress_path, list(changed.values()))
+            store.upsert_changed(
+                self.config.progress_path, list(changed.values()), self.config.day_start
+            )
 
     def _resolve_day(self, now: datetime, today: date) -> list[tuple[Task, datetime, datetime]]:
         """Today's tasks with absolute start/end, ordered by start."""
@@ -227,7 +270,12 @@ class Supervisor(discord.Client):
 
     async def _day_start(self, now: datetime) -> None:
         today_md = _md(daytime.logical_day_of(now, self.config.day_start))
-        store.archive_past(self.config.progress_path, self.config.history_path, today_md)
+        store.archive_past(
+            self.config.progress_path,
+            self.config.history_path,
+            today_md,
+            self.config.day_start,
+        )
         await self._sync_plan(now)
 
     async def _day_end(self, now: datetime) -> None:
@@ -249,7 +297,7 @@ class Supervisor(discord.Client):
         plan_file = Path(self.config.plan_path)
         text = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
         try:
-            parsed = build_tasks(await self.llm.parse_plan(text))
+            parsed = build_tasks(await self.llm.parse_plan(text), self.config.day_start)
         except DuplicateCodeError as exc:
             await self._send(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
             return
@@ -261,6 +309,7 @@ class Supervisor(discord.Client):
         store.write_all(
             self.config.progress_path,
             [t for t in existing if t.code not in removed] + plan.to_add,
+            self.config.day_start,
         )
 
     # -- incoming messages ---------------------------------------------------
@@ -287,7 +336,8 @@ class Supervisor(discord.Client):
             await self._sync_plan(datetime.now(self.config.tz))
             await self._send("Synced plan.txt into progress.csv.")
         elif name == "progress":
-            await self._send(self._render_table())
+            for chunk in self._render_table():
+                await self._send(chunk)
         elif name == "modify":
             await self._modify(arg)
         elif name == "clear":
@@ -385,9 +435,9 @@ class Supervisor(discord.Client):
             return
         if deleted:
             kept = [t for t in tasks if t.code not in deleted]
-            store.write_all(self.config.progress_path, kept)
+            store.write_all(self.config.progress_path, kept, self.config.day_start)
         elif touched:
-            store.upsert_changed(self.config.progress_path, touched)
+            store.upsert_changed(self.config.progress_path, touched, self.config.day_start)
         await self._send(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
 
     async def _clear(self, arg: str) -> None:
@@ -488,12 +538,58 @@ class Supervisor(discord.Client):
                 return  # off-topic chat: leave the file untouched (SPEC §6)
             store.upsert_changed(self.config.progress_path, [task])
 
-    def _render_table(self) -> str:
+    # Column display widths for the !progress table (SPEC §6). TIME is the start time only.
+    _COLS = (("TIME", 5), ("TASK", 18), ("STATUS", 7), ("PROGRESS", 22))
+
+    def _render_table(self) -> list[str]:
+        """Render progress.csv as aligned monospace tables, split to fit Discord's limit.
+
+        Columns are date / planned_time / task / status / latest_progress. Returns one
+        or more messages (header repeated on each), each a fenced code block so the
+        columns stay aligned -- Discord does not render markdown tables (SPEC §6).
+        """
         rows = store.load(self.config.progress_path)
         if not rows:
-            return "progress.csv is empty."
-        lines = [f"{t.code}  {t.status.value:<12}  {t.description}" for t in rows]
-        return "```\n" + "\n".join(lines) + "\n```"
+            return ["progress.csv is empty."]
+        header = "  ".join(_fit(name, width) for name, width in self._COLS)
+        # Group by day with a blank line between days (rows are stored day-sorted; the
+        # date column was dropped, so the gap is what separates one day from the next).
+        body: list[str] = []
+        prev_date: str | None = None
+        for t in rows:
+            if prev_date is not None and t.date != prev_date:
+                body.append("")
+            body.append(self._table_row(t))
+            prev_date = t.date
+        # Pack lines into fenced blocks under the char limit, repeating the header.
+        overhead = len(header) + len("```\n\n```\n") + 1
+        chunks: list[str] = []
+        batch: list[str] = []
+        size = 0
+        for line in body:
+            if batch and overhead + size + len(line) + 1 > _DISCORD_LIMIT:
+                chunks.append(self._fence(header, batch))
+                batch, size = [], 0
+            batch.append(line)
+            size += len(line) + 1
+        if batch:
+            chunks.append(self._fence(header, batch))
+        return chunks
+
+    def _table_row(self, t: Task) -> str:
+        values = (
+            t.planned_start,
+            t.description,
+            _STATUS_LABEL.get(t.status, t.status.value),
+            t.latest_progress or "-",
+        )
+        return "  ".join(
+            _fit(value, width) for value, (_, width) in zip(values, self._COLS, strict=True)
+        )
+
+    @staticmethod
+    def _fence(header: str, lines: list[str]) -> str:
+        return "```\n" + header + "\n" + "\n".join(lines) + "\n```"
 
     # -- outgoing ------------------------------------------------------------
 
