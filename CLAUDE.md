@@ -17,8 +17,10 @@
 
 - 监工**无记忆**：只读当前快照 + 当前时间下结论；去重只认 `latest_progress_time` 列，绝不靠内存。
 - **文件是唯一事实来源**：监工写回时先重读、只改这一轮要动的行，**不整文件覆盖**（防盖掉手动编辑）。
-- `!sync` = 按 **`code`** 集合对比（增缺的/删多的/匹配的整行不动），只动今天及以后；**不重判 `type`**。
+- `!sync` = 按 **`code`** 集合对比（增缺的/删多的/匹配的整行不动），只动今天及以后；**不重判 `type`**。唯一例外：`notes` 列由 `plan.txt` 全权拥有，匹配行也会刷（见 SPEC §3.1）。
+- 解析分层：任务骨架（日期/时间/名/`subject`/`code`）由 `plan_parser.parse_plan_text` **确定性**解析（不漏行、code 稳）；LLM（`llm.annotate_plan`）只在固定清单上标注 `type`/`notes`，无权增删改任务。
 - 时间一律 **tz-aware**（`Europe/London`，自动处理夏令时）；跨午夜按「逻辑日」（日初 4:00 为界）。
+- `context.txt` 只经 LLM 层，只改变「理解含义 + 措辞」（在 `llm.py._chat` 统一拼进 system prompt）；**不进监工决策**（何时催/催谁/状态推进仍只看快照+时间+配置）。别把它当行为/时间配置面板。
 
 ## 别碰 / 先问
 
@@ -30,4 +32,4 @@
 
 - 密钥走环境变量：`DISCORD_TOKEN` / `DISCORD_USER_ID` / `DISCORD_CHANNEL_ID` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`。
 - 模板见 `.env.example`（只有键名）；真实值放 `.env`（已 gitignore）。
-- 运行期数据 `plan.txt` / `progress.csv` / `history.csv`（默认在 `data/`）含个人计划，**不提交**（已 gitignore）。
+- 运行期数据 `plan.txt` / `progress.csv` / `history.csv` / `context.txt`（默认在 `data/`）含个人计划，**不提交**（已 gitignore）。`context.txt` 是我手写、Bot 只读的常驻自然语言说明（术语/口径/偏好/背景，见 SPEC §2、§4.5）。

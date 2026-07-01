@@ -11,7 +11,8 @@ day's last task -- the last task is never nagged, only a boundary):
     status        time situation                                  -> action
     COMPLETED     --                                              -> SKIP
     NOT_STARTED   before planned start                            -> WAIT
-    NOT_STARTED   at/after planned start                          -> NAG_START
+    NOT_STARTED   at/after start, before planned end              -> NAG_START
+    NOT_STARTED   after planned end (window fully missed)         -> STOP_NAGGING
     OVERDUE       before planned end, on a backoff nag minute     -> NAG_START
     OVERDUE       before planned end, off a nag minute            -> WAIT
     OVERDUE       after planned end                               -> STOP_NAGGING
@@ -81,6 +82,11 @@ def decide(
     if task.status is Status.NOT_STARTED:
         if now < planned_start:
             return Action.WAIT
+        if now >= planned_end:
+            # The whole window is already gone: nagging "start now" is pointless, so
+            # go straight to OVERDUE without a nag (caller flips it), left for the
+            # day-end summary -- symmetric with an OVERDUE task past its end.
+            return Action.STOP_NAGGING
         return Action.NAG_START  # first nag; caller flips status to OVERDUE
 
     if task.status is Status.OVERDUE:

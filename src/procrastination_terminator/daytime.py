@@ -14,6 +14,25 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, tzinfo
 
 
+def parse_clock(value: str) -> time:
+    """Parse an ``"HH:MM"`` clock string (lenient about a missing leading zero)."""
+    hour, minute = value.split(":")
+    return time(int(hour), int(minute))
+
+
+def logical_order(clock: time, day_start: time) -> int:
+    """Sort key ordering clock times *within one logical day*.
+
+    Returns minutes-since-midnight, shifted by +24h for after-midnight times
+    (those before ``day_start``), so a 00:30 "after midnight" task sorts *after* a
+    23:00 one instead of before it. This is the same day-boundary shift
+    :func:`resolve` applies when it rolls those times onto the next calendar day.
+    """
+    minutes = clock.hour * 60 + clock.minute
+    boundary = day_start.hour * 60 + day_start.minute
+    return minutes + 24 * 60 if minutes < boundary else minutes
+
+
 def logical_day_of(moment: datetime, day_start: time) -> date:
     """Return the logical-day calendar date that ``moment`` falls in."""
     if moment.time() < day_start:

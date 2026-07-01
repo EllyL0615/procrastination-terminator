@@ -9,7 +9,9 @@ gateway, etc.); the endpoint, model, and message language come from config.
 
 from __future__ import annotations
 
+import contextlib
 import json
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -52,6 +54,33 @@ class LLMClient:
             timeout=30.0,
         )
 
+    def _user_context(self) -> str:
+        """Read the user's free-form context file, or '' if absent (SPEC §2)."""
+        try:
+            return Path(self._config.context_path).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return ""
+
+    def _augment(self, system: str) -> str:
+        """Fold the user's standing context into a system prompt (SPEC §4.5).
+
+        The context file is background the user hand-writes about themselves and
+        their tasks -- glossary, idioms, tone preferences. It shapes how the model
+        interprets their words and phrases replies, but must not override the
+        task-specific rules or output format above, so it is fenced and labelled
+        as background. An absent or empty file leaves the prompt unchanged.
+        """
+        context = self._user_context()
+        if not context:
+            return system
+        return (
+            f"{system}\n\n"
+            "--- Background the user wrote about themselves and their tasks ---\n"
+            "Use it to interpret their terms and idioms and to shape your wording. "
+            "It does NOT override the task rules or output format instructed above.\n"
+            f"{context}"
+        )
+
     async def _chat(
         self,
         system: str,
@@ -60,7 +89,7 @@ class LLMClient:
         json_mode: bool = False,
         history: list[dict[str, str]] | None = None,
     ) -> str:
-        messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        messages: list[dict[str, str]] = [{"role": "system", "content": self._augment(system)}]
         if history:
             messages.extend(history)  # recent conversation turns, oldest first
         messages.append({"role": "user", "content": user})
@@ -179,23 +208,50 @@ class LLMClient:
         )
         return (await self._chat(system, situation, history=history)).strip()
 
-    async def parse_plan(self, text: str) -> list[dict[str, str]]:
-        """Extract structured task entries from free-form plan.txt (SPEC §9).
+    async def annotate_plan(self, text: str, tasks: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Annotate a fixed task list with its ``type`` and any attached note (SPEC §2).
 
-        Each entry has date (MM.DD), time (HH:MM start), subject (short tag),
-        description, and type; :func:`plan_parser.build_tasks` assembles them.
+        The task backbone is parsed deterministically upstream (:func:`plan_parser.
+        parse_plan_text`); this reads the raw plan only to judge each task's type and
+        to attach any informative note -- a non-task line (no leading time), usually
+        written just under its task (e.g. ``30min problems`` / ``draw a mind map``).
+        The task list is a CLOSED set keyed by 1-based index, so the model annotates
+        it but cannot add, drop, or reorder tasks -- the schedule stays exactly as
+        parsed. Returns one ``{"type", "notes"}`` per task, in order; a missing or
+        garbled entry falls back to ``study`` (safer to over-nag than to skip) with
+        no note, and meaningless scribbles are dropped.
         """
+        numbered = "\n".join(
+            f"{i}. {t['time']} {t['description']}" for i, t in enumerate(tasks, start=1)
+        )
         content = await self._chat(
-            "Extract the user's tasks from their plan. For each task output: "
-            "date (MM.DD), time (HH:MM start), subject (a short uppercase tag like PGM), "
-            "description, and type (one of study, work, outing, other). "
-            'Reply as JSON: {"tasks": [{"date": ..., "time": ..., "subject": ..., '
-            '"description": ..., "type": ...}, ...]}.',
-            text,
+            "You are given the user's raw plan, then a NUMBERED list of tasks already "
+            "extracted from it. The list is FIXED -- do not add, remove, or reorder. "
+            "For each numbered task return its type (study, work, outing, other; use "
+            "'other' for meals, sleep, breaks) and any note attached to it. A note is "
+            "a plan line that is NOT itself a task (no leading time), usually written "
+            "just below its task; attach it to that task and condense it to a short "
+            "phrase. Drop meaningless scribbles; a task with no note gets an empty "
+            "string. "
+            'Reply as JSON: {"annotations": [{"index": 1, "type": "...", "notes": '
+            '"..."}, ...]} -- one entry per task, index matching the list.',
+            f"PLAN:\n{text}\n\nTASKS:\n{numbered}",
             json_mode=True,
         )
-        raw = _extract_json(content).get("tasks", [])
-        return [{str(k): str(v) for k, v in item.items()} for item in raw]
+        by_index: dict[int, dict[str, Any]] = {}
+        for item in _extract_json(content).get("annotations", []):
+            if isinstance(item, dict) and "index" in item:
+                with contextlib.suppress(ValueError, TypeError):
+                    by_index[int(item["index"])] = item
+        types = {t.value for t in TaskType}
+        annotations: list[dict[str, str]] = []
+        for i in range(1, len(tasks) + 1):
+            item = by_index.get(i, {})
+            task_type = str(item.get("type", "")).lower()
+            if task_type not in types:
+                task_type = TaskType.STUDY.value
+            annotations.append({"type": task_type, "notes": str(item.get("notes", "")).strip()})
+        return annotations
 
     async def plan_edits(self, tasks: list[Task], instruction: str) -> list[dict[str, str]]:
         """Turn a natural-language edit into structured operations on the table (SPEC §6)."""

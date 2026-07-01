@@ -8,10 +8,69 @@ Pre-today rows never take part.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import time
 
+from . import daytime
 from .models import Status, Task, TaskType
+
+# Line-leading markers (SPEC §2): a date header opens a day, a time opens a task.
+_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\b")
+_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})\b\s*(.*)$")
+
+
+def _subject(description: str) -> str:
+    """A short uppercase tag from the description's first word (SPEC §2).
+
+    Deterministic so a task's ``code`` stays stable across syncs; ``\\w+`` also
+    matches CJK, so ``睡觉`` -> ``睡觉`` and ``Game Chap1`` -> ``GAME``.
+    """
+    match = re.match(r"\w+", description)
+    return match.group(0).upper() if match else "TASK"
+
+
+def parse_plan_text(text: str) -> list[dict[str, str]]:
+    """Deterministically extract the task backbone from plan.txt (SPEC §2, §9).
+
+    Only line-leading structure carries meaning: a line starting with a date
+    (``MM.DD``) opens a logical day and contributes ONLY its date -- trailing text
+    on it (a weekday or a note to self like ``07.01 Game``) is ignored. A line
+    starting with a time (``HH:MM``) is a task under the current day; its start time
+    and the rest of the line (the description) are taken verbatim. Every other line
+    is the user's freeform scribble and is skipped -- task notes are attached later
+    by the LLM. A task line before any date header is dropped (no day to attach to).
+
+    Returns raw entries (``date``, ``time``, ``subject``, ``description``); ``type``
+    and ``notes`` are filled in by the LLM before :func:`build_tasks` assembles them.
+    """
+    entries: list[dict[str, str]] = []
+    current_date: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        time_match = _TIME_RE.match(line)
+        if time_match is not None:
+            if current_date is None:
+                continue
+            hour, minute, rest = time_match.groups()
+            description = rest.strip()
+            entries.append(
+                {
+                    "date": current_date,
+                    "time": f"{int(hour):02d}:{int(minute):02d}",
+                    "subject": _subject(description),
+                    "description": description,
+                }
+            )
+            continue
+        date_match = _DATE_RE.match(line)
+        if date_match is not None:
+            month, day = date_match.groups()
+            current_date = f"{int(month):02d}.{int(day):02d}"
+    return entries
 
 
 @dataclass
@@ -47,16 +106,21 @@ def find_duplicate_codes(tasks: list[Task]) -> list[str]:
     return list(seen)
 
 
-def build_tasks(entries: list[dict[str, str]]) -> list[Task]:
+def build_tasks(entries: list[dict[str, str]], day_start: time = time(4, 0)) -> list[Task]:
     """Assemble Task rows from raw LLM-extracted plan entries (pure).
 
     Each entry has ``date`` (``MM.DD``), ``time`` (``HH:MM`` start), ``subject``
-    (short code), ``description``, and ``type``. Entries are ordered by date+time;
-    each task's ``planned_end`` is the next same-day task's start (SPEC §2), and
-    the day's last task ends at its own start (it is only a boundary, never
-    nagged). Raises :class:`DuplicateCodeError` on a repeated code (SPEC §3.1, C2).
+    (short code), ``description``, and ``type``. Entries are ordered by date then
+    *logical-day* time (SPEC §5), so an after-midnight task like ``00:00`` sleep
+    sorts to the end of its day, not the start. Each task's ``planned_end`` is the
+    next same-day task's start (SPEC §2), and the day's last task ends at its own
+    start (it is only a boundary, never nagged). Raises :class:`DuplicateCodeError`
+    on a repeated code (SPEC §3.1, C2).
     """
-    ordered = sorted(entries, key=lambda e: (e["date"], e["time"]))
+    ordered = sorted(
+        entries,
+        key=lambda e: (e["date"], daytime.logical_order(daytime.parse_clock(e["time"]), day_start)),
+    )
     tasks: list[Task] = []
     for i, entry in enumerate(ordered):
         date, start = entry["date"], entry["time"]
@@ -70,6 +134,7 @@ def build_tasks(entries: list[dict[str, str]]) -> list[Task]:
                 planned_start=start,
                 planned_end=end,
                 description=entry["description"],
+                notes=entry.get("notes", ""),
                 type=TaskType(entry["type"]),
                 status=Status.NOT_STARTED,
             )

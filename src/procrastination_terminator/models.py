@@ -16,11 +16,17 @@ class TaskType(enum.Enum):
 
 
 class Status(enum.Enum):
-    """Lifecycle state of a study/work task (SPEC §4)."""
+    """Lifecycle state of a study/work task (SPEC §4).
 
-    NOT_STARTED = "not_started"
+    The values are the exact keywords written to progress.csv and shown by
+    ``!progress`` -- one shared vocabulary (``todo`` / ``overdue`` / ``started`` /
+    ``completed``). The member names describe the same states in code, so
+    ``NOT_STARTED`` serialises as ``todo`` and ``IN_PROGRESS`` as ``started``.
+    """
+
+    NOT_STARTED = "todo"
     OVERDUE = "overdue"
-    IN_PROGRESS = "in_progress"
+    IN_PROGRESS = "started"
     COMPLETED = "completed"
 
 
@@ -38,6 +44,7 @@ CSV_COLUMNS: tuple[str, ...] = (
     "date",
     "planned_time",
     "task",
+    "notes",
     "type",
     "status",
     "actual_time",
@@ -56,6 +63,9 @@ class Task:
 
     `latest_progress` is free text the user may edit; `latest_progress_time` is the
     machine-owned timestamp the monitor uses for deduplication (SPEC §2, A5).
+
+    `notes` is task-specific guidance parsed from plan.txt (the lines written under a
+    task); plan.txt owns it, so sync refreshes it even on matched rows (SPEC §3.1).
     """
 
     code: str
@@ -65,6 +75,7 @@ class Task:
     description: str
     type: TaskType
     status: Status
+    notes: str = ""
     actual_start: str | None = None
     actual_end: str | None = None
     latest_progress: str = ""

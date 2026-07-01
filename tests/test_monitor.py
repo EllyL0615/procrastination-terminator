@@ -57,6 +57,13 @@ def test_not_started_at_or_after_start_nags() -> None:
     assert call(make(Status.NOT_STARTED), at(15)) is Action.NAG_START  # late first contact
 
 
+def test_not_started_past_end_stops_without_nagging() -> None:
+    # The whole window is gone (e.g. the bot was down all afternoon): no pointless
+    # "start now" nag -- go straight to overdue (caller flips it) for the summary.
+    assert call(make(Status.NOT_STARTED), at(18)) is Action.STOP_NAGGING
+    assert call(make(Status.NOT_STARTED), at(19)) is Action.STOP_NAGGING
+
+
 def test_overdue_nags_only_on_backoff_minutes() -> None:
     assert call(make(Status.OVERDUE), at(14, 8)) is Action.NAG_START  # minute 8 is on-curve
     assert call(make(Status.OVERDUE), at(14, 9)) is Action.WAIT  # minute 9 is off-curve

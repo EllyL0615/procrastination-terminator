@@ -38,6 +38,7 @@ class Config:
     plan_path: str = "data/plan.txt"
     progress_path: str = "data/progress.csv"
     history_path: str = "data/history.csv"
+    context_path: str = "data/context.txt"  # user-written free-form notes fed to the LLM (SPEC §2)
 
     @property
     def tz(self) -> ZoneInfo:
