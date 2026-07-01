@@ -33,6 +33,7 @@ class Config:
     poll_seconds: int = 60
     personality_granularity: PersonalityGranularity = PersonalityGranularity.PER_TASK
     message_language: str = "zh"
+    dialogue_history_limit: int = 12  # recent DMs fed as context when writing a message (SPEC §4.5)
     plan_path: str = "data/plan.txt"
     progress_path: str = "data/progress.csv"
     history_path: str = "data/history.csv"
@@ -61,4 +62,5 @@ class Config:
             bot_name=os.environ.get("BOT_NAME", "Bot"),
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
             message_language=os.environ.get("MESSAGE_LANG", "zh"),
+            dialogue_history_limit=int(os.environ.get("DIALOGUE_HISTORY", "12")),
         )

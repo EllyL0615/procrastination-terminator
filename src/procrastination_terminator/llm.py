@@ -52,14 +52,19 @@ class LLMClient:
             timeout=30.0,
         )
 
-    async def _chat(self, system: str, user: str, *, json_mode: bool = False) -> str:
-        payload: dict[str, Any] = {
-            "model": self._config.llm_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
+    async def _chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool = False,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        if history:
+            messages.extend(history)  # recent conversation turns, oldest first
+        messages.append({"role": "user", "content": user})
+        payload: dict[str, Any] = {"model": self._config.llm_model, "messages": messages}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         response = await self._http.post("/chat/completions", json=payload)
@@ -153,11 +158,14 @@ class LLMClient:
         *,
         personality: Personality,
         intensity: int = 0,
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """Write one styled message for ``situation`` (SPEC §4.5).
 
         ``situation`` describes what to say (built by the bot); this applies the
         persona, escalation ``intensity`` (0 = mild), and the configured language.
+        ``history`` is the recent DM conversation (oldest first); it grounds the
+        wording so an in-chat correction the user just made is honored (SPEC §4.5).
         """
         language = _LANGUAGE_NAME.get(self._config.message_language, self._config.message_language)
         system = (
@@ -165,9 +173,11 @@ class LLMClient:
             f"Write a single short message in {language}. "
             f"Persona: {_PERSONA[personality]}. "
             f"Forcefulness: {intensity} (0 = mild, higher = more intense). "
+            "The turns before this are your recent DM history with the user; honor any "
+            "correction or clarification they made there (e.g. what a task really is). "
             "Output only the message text."
         )
-        return (await self._chat(system, situation)).strip()
+        return (await self._chat(system, situation, history=history)).strip()
 
     async def parse_plan(self, text: str) -> list[dict[str, str]]:
         """Extract structured task entries from free-form plan.txt (SPEC §9).

@@ -441,8 +441,9 @@ class Supervisor(discord.Client):
         self, situations: list[str], lead: Task | None, day: date, *, intensity: int = 0
     ) -> None:
         personality = self._personality(lead, day)
+        history = await self._recent_dialogue()
         text = await self.llm.generate_message(
-            " ".join(situations), personality=personality, intensity=intensity
+            " ".join(situations), personality=personality, intensity=intensity, history=history
         )
         await self._dm(text)
 
@@ -455,11 +456,32 @@ class Supervisor(discord.Client):
             self.config.personality_granularity, code=task.code, day=_md(day)
         )
 
-    async def _dm(self, text: str) -> None:
+    async def _dm_channel(self) -> discord.DMChannel:
         user = self.get_user(self.config.discord_user_id) or await self.fetch_user(
             self.config.discord_user_id
         )
-        await user.send(text)
+        return user.dm_channel or await user.create_dm()
+
+    async def _recent_dialogue(self) -> list[dict[str, str]]:
+        """Recent DM turns (oldest first) as chat messages, so generated wording can
+        honor the user's in-conversation corrections. This grounds *wording* only; the
+        monitor's decisions stay file+time based and memoryless (SPEC §3.2, §4.5). How
+        many turns is ``config.dialogue_history_limit`` (env ``DIALOGUE_HISTORY``).
+        """
+        channel = await self._dm_channel()
+        turns: list[dict[str, str]] = []
+        async for message in channel.history(limit=self.config.dialogue_history_limit):
+            content = message.content.strip()
+            if not content:
+                continue
+            role = "user" if message.author.id == self.config.discord_user_id else "assistant"
+            turns.append({"role": role, "content": content})
+        turns.reverse()
+        return turns
+
+    async def _dm(self, text: str) -> None:
+        channel = await self._dm_channel()
+        await channel.send(text)
 
 
 def monitor_decide(
