@@ -53,6 +53,43 @@ def test_round_trip(tmp_path: Path) -> None:
     assert store.load(path) == [done, in_progress]
 
 
+def test_notes_column_round_trips(tmp_path: Path) -> None:
+    path = str(tmp_path / "progress.csv")
+    t = task("0313-1400-PGM", "03.13")
+    t.notes = "30min problems; mind map"
+    store.write_all(path, [t])
+    assert store.load(path)[0].notes == "30min problems; mind map"
+
+
+def test_load_old_file_without_notes_column(tmp_path: Path) -> None:
+    # A progress.csv written before the notes column existed must still load, with
+    # notes defaulting to empty -- backward-compatible migration (SPEC §2).
+    path = tmp_path / "progress.csv"
+    path.write_text(
+        "code,date,planned_time,task,type,status,actual_time,latest_progress,latest_progress_time\n"
+        "0313-1400-PGM,03.13,14:00-18:00,some task,study,not_started,,,\n",
+        encoding="utf-8",
+    )
+    loaded = store.load(str(path))
+    assert len(loaded) == 1
+    assert loaded[0].code == "0313-1400-PGM"
+    assert loaded[0].notes == ""
+
+
+def test_load_migrates_legacy_status_keywords(tmp_path: Path) -> None:
+    # Files written before the status rename use not_started/in_progress; they must
+    # still load, mapped to the current keywords todo/started (SPEC §2).
+    path = tmp_path / "progress.csv"
+    path.write_text(
+        "code,date,planned_time,task,notes,type,status,actual_time,latest_progress,"
+        "latest_progress_time\n"
+        "0313-1400-PGM,03.13,14:00-18:00,t,,study,not_started,,,\n"
+        "0313-1800-RUN,03.13,18:00-20:00,t,,study,in_progress,18:02-,,\n",
+        encoding="utf-8",
+    )
+    assert [t.status for t in store.load(str(path))] == [Status.NOT_STARTED, Status.IN_PROGRESS]
+
+
 def test_upsert_updates_existing_and_appends_new(tmp_path: Path) -> None:
     path = str(tmp_path / "progress.csv")
     a = task("0313-1400-PGM", "03.13")

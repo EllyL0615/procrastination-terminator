@@ -25,18 +25,12 @@ from .config import Config, PersonalityGranularity
 from .llm import LLMClient
 from .models import Personality, Status, Task, TaskType
 from .monitor import Action, decide
-from .plan_parser import DuplicateCodeError, build_tasks, diff_sync
+from .plan_parser import DuplicateCodeError, build_tasks, diff_sync, parse_plan_text
 
 _AWAITING = "awaiting reply"  # placeholder progress marker (SPEC §3.2 robustness)
 _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
 
 # Compact, fixed-ish status labels for the !progress table (SPEC §6).
-_STATUS_LABEL = {
-    Status.NOT_STARTED: "todo",
-    Status.OVERDUE: "overdue",
-    Status.IN_PROGRESS: "doing",
-    Status.COMPLETED: "done",
-}
 _DISCORD_LIMIT = 2000  # max characters per message
 _TRUNCATE_MARK = "~"  # ASCII, so its width is stable across fonts (unlike "…")
 
@@ -98,6 +92,15 @@ def _apply_edit(task: Task, edit: dict[str, str]) -> None:
         task.status = Status(edit["status"])
 
 
+def _with_notes(line: str, task: Task) -> str:
+    """Append the task's plan notes (if any) to a situation line (SPEC §2, §4.1).
+
+    The notes say what this task actually involves, so they ground the concrete
+    first step and the progress check instead of the model guessing.
+    """
+    return f"{line} (Task notes from the plan: {task.notes}.)" if task.notes else line
+
+
 def _start_nag_line(task: Task, *, first: bool) -> str:
     """Situation text for a start-nag (SPEC §4.1).
 
@@ -115,11 +118,13 @@ def _start_nag_line(task: Task, *, first: bool) -> str:
         "action and ask them to report back once they've started."
     )
     if first:
-        return line + (
+        line += (
             " First nudge: also give a concrete, practical way to switch in and begin, "
             "broken into 3 to 5 tiny do-it-now steps (no more than 5), each achievable."
         )
-    return line + " Keep it brief -- just help them take that first step."
+    else:
+        line += " Keep it brief -- just help them take that first step."
+    return _with_notes(line, task)
 
 
 class Supervisor(discord.Client):
@@ -220,11 +225,13 @@ class Supervisor(discord.Client):
         if action is Action.MIDPOINT_CHECK:
             self._mark_awaiting(task, now)
             changed[task.code] = task
-            return f"Check how '{task.description}' is going at its midpoint."
+            return _with_notes(f"Check how '{task.description}' is going at its midpoint.", task)
         if action is Action.END_CHECK_HANDOFF:
             self._mark_awaiting(task, now)
             changed[task.code] = task
-            return f"Confirm '{task.description}' is wrapping up and hand off to what's next."
+            return _with_notes(
+                f"Confirm '{task.description}' is wrapping up and hand off to what's next.", task
+            )
         return None
 
     def _handoff(
@@ -293,24 +300,41 @@ class Supervisor(discord.Client):
         )
         await self._say([situation], None, daytime.logical_day_of(now, self.config.day_start))
 
-    async def _sync_plan(self, now: datetime) -> None:
+    async def _sync_plan(self, now: datetime) -> bool:
+        """Sync plan.txt into progress.csv; return False only if it bailed on an error."""
         plan_file = Path(self.config.plan_path)
         text = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
+        entries = parse_plan_text(text)  # deterministic backbone (SPEC §2)
+        if entries:
+            annotations = await self.llm.annotate_plan(text, entries)
+            for entry, annotation in zip(entries, annotations, strict=True):
+                entry.update(annotation)  # type + notes onto the fixed task
         try:
-            parsed = build_tasks(await self.llm.parse_plan(text), self.config.day_start)
+            parsed = build_tasks(entries, self.config.day_start)
         except DuplicateCodeError as exc:
             await self._send(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
-            return
+            return False
+        today = _md(daytime.logical_day_of(now, self.config.day_start))
         existing = store.load(self.config.progress_path)
-        plan = diff_sync(existing, parsed, _md(daytime.logical_day_of(now, self.config.day_start)))
-        if not plan.to_add and not plan.to_delete:
-            return
+        plan = diff_sync(existing, parsed, today)
+        # plan.txt owns the notes column: refresh it on matched rows too, leaving all
+        # runtime state untouched -- the one exception to "matched rows stay" (SPEC §3.1).
+        parsed_notes = {t.code: t.notes for t in parsed if t.date >= today}
+        notes_changed = False
+        for task in existing:
+            fresh = parsed_notes.get(task.code)
+            if fresh is not None and task.notes != fresh:
+                task.notes = fresh
+                notes_changed = True
+        if not plan.to_add and not plan.to_delete and not notes_changed:
+            return True
         removed = set(plan.to_delete)
         store.write_all(
             self.config.progress_path,
             [t for t in existing if t.code not in removed] + plan.to_add,
             self.config.day_start,
         )
+        return True
 
     # -- incoming messages ---------------------------------------------------
 
@@ -333,11 +357,11 @@ class Supervisor(discord.Client):
         elif name == "completed":
             await self._mark(arg, Status.COMPLETED)
         elif name == "sync":
-            await self._sync_plan(datetime.now(self.config.tz))
-            await self._send("Synced plan.txt into progress.csv.")
+            if await self._sync_plan(datetime.now(self.config.tz)):
+                await self._send("Synced plan.txt into progress.csv.")
+                await self._show_progress()  # show the result, else it is invisible
         elif name == "progress":
-            for chunk in self._render_table():
-                await self._send(chunk)
+            await self._show_progress()
         elif name == "modify":
             await self._modify(arg)
         elif name == "clear":
@@ -539,7 +563,12 @@ class Supervisor(discord.Client):
             store.upsert_changed(self.config.progress_path, [task])
 
     # Column display widths for the !progress table (SPEC §6). TIME is the start time only.
-    _COLS = (("TIME", 5), ("TASK", 18), ("STATUS", 7), ("PROGRESS", 22))
+    _COLS = (("TIME", 5), ("TASK", 18), ("STATUS", 9), ("PROGRESS", 22))
+
+    async def _show_progress(self) -> None:
+        """Send the rendered progress.csv table (SPEC §6); shared by !progress and !sync."""
+        for chunk in self._render_table():
+            await self._send(chunk)
 
     def _render_table(self) -> list[str]:
         """Render progress.csv as aligned monospace tables, split to fit Discord's limit.
@@ -580,7 +609,7 @@ class Supervisor(discord.Client):
         values = (
             t.planned_start,
             t.description,
-            _STATUS_LABEL.get(t.status, t.status.value),
+            t.status.value,
             t.latest_progress or "-",
         )
         return "  ".join(

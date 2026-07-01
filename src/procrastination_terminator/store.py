@@ -20,6 +20,11 @@ from pathlib import Path
 from . import daytime
 from .models import CSV_COLUMNS, Status, Task, TaskType
 
+# Legacy status keywords -> current ones, so a progress.csv/history.csv written
+# before the rename (not_started/in_progress) still loads (SPEC §2). The file
+# self-migrates on the next write; drop this map once no old files remain.
+_STATUS_ALIASES = {"not_started": "todo", "in_progress": "started"}
+
 
 def _join_range(start: str | None, end: str | None) -> str:
     """Render a head/tail pair as ``"start-end"`` / ``"start-"`` / ``""``."""
@@ -42,6 +47,7 @@ def _to_row(task: Task) -> dict[str, str]:
         "date": task.date,
         "planned_time": f"{task.planned_start}-{task.planned_end}",
         "task": task.description,
+        "notes": task.notes,
         "type": task.type.value,
         "status": task.status.value,
         "actual_time": _join_range(task.actual_start, task.actual_end),
@@ -59,8 +65,9 @@ def _from_row(row: dict[str, str]) -> Task:
         planned_start=planned_start or "",
         planned_end=planned_end or "",
         description=row["task"],
+        notes=row.get("notes", ""),
         type=TaskType(row["type"]),
-        status=Status(row["status"]),
+        status=Status(_STATUS_ALIASES.get(row["status"], row["status"])),
         actual_start=actual_start,
         actual_end=actual_end,
         latest_progress=row["latest_progress"],
