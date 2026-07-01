@@ -324,3 +324,28 @@ def test_429_is_retried_then_succeeds() -> None:
 
     assert asyncio.run(scenario()) == []  # recovered on the retry
     assert state["first"] is False
+
+
+def test_load_progress_sorts_by_logical_day() -> None:
+    fake = _FakeNotion()
+
+    async def scenario() -> list[str]:
+        backend = _backend(fake)
+        try:
+            await backend.upsert_changed(
+                [
+                    _task("0701-2300-SLEEP", planned_start="23:00", planned_end="01:00"),
+                    _task("0701-0000-MID", planned_start="00:00", planned_end="08:00"),
+                    _task("0701-1400-GAME", planned_start="14:00", planned_end="15:00"),
+                ]
+            )
+            return [t.code for t in await backend.load_progress()]
+        finally:
+            await backend.aclose()
+
+    # 14:00 first, then 23:00; the after-midnight 00:00 trails its logical day.
+    assert asyncio.run(scenario()) == [
+        "0701-1400-GAME",
+        "0701-2300-SLEEP",
+        "0701-0000-MID",
+    ]
