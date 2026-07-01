@@ -710,6 +710,14 @@ class Supervisor(discord.Client):
         honor the user's in-conversation corrections. This grounds *wording* only; the
         monitor's decisions stay file+time based and memoryless (SPEC §3.2, §4.5). How
         many turns is ``config.dialogue_history_limit`` (env ``DIALOGUE_HISTORY``).
+
+        Each turn's send time is stamped into its ``content`` as a ``[MM-DD HH:MM]``
+        prefix -- the chat API carries only role/content, so the timestamp rides along
+        in the text. Times are converted from Discord's UTC ``created_at`` into
+        ``config.tz`` (same clock as the logical day) so the LLM reads them in the
+        user's timezone. This is wording context only: these timestamps must never
+        reach the monitor, whose timing stays snapshot+clock based (memoryless,
+        SPEC §3.2).
         """
         channel = await self._channel()
         turns: list[dict[str, str]] = []
@@ -718,7 +726,8 @@ class Supervisor(discord.Client):
             if not content:
                 continue
             role = "user" if message.author.id == self.config.discord_user_id else "assistant"
-            turns.append({"role": role, "content": content})
+            stamp = message.created_at.astimezone(self.config.tz).strftime("%m-%d %H:%M")
+            turns.append({"role": role, "content": f"[{stamp}] {content}"})
         turns.reverse()
         return turns
 
