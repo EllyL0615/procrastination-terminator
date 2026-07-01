@@ -16,6 +16,7 @@ Command output is only the non-secret ids it created.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import httpx
@@ -30,6 +31,29 @@ _PLAN_HINT = (
     "Write your daily plan here: a date line like '07.01', then time lines like '14:00 Game Chap1'."
 )
 _CONTEXT_HINT = "Standing context for the bot (glossary / tone / facts about you), e.g. 'Game = a course, not video games'."
+
+
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_HEX32_RE = re.compile(r"[0-9a-fA-F]{32}")
+
+
+def _normalize_page_id(value: str) -> str:
+    """Accept a full Notion URL, a bare 32-char id, or a dashed UUID; return a UUID.
+
+    A Copy-link URL looks like ``.../Title-<32 hex>?source=...``; the id is those 32
+    hex chars. Notion's API wants a UUID, so format them 8-4-4-4-12.
+    """
+    text = value.strip()
+    dashed = _UUID_RE.search(text)
+    if dashed:
+        return dashed.group(0)
+    matches = _HEX32_RE.findall(text.split("?")[0])
+    if matches:
+        raw = matches[-1]
+        return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
+    raise SystemExit(f"could not find a Notion page id in: {value!r}")
 
 
 def _database_properties() -> dict[str, Any]:
@@ -93,14 +117,14 @@ def init_notion(argv: list[str], transport: httpx.BaseTransport | None = None) -
     args = [a for a in argv if a]
     if len(args) != 1:
         raise SystemExit(_USAGE)
-    parent_page_id = args[0]
-
     token = os.environ.get("NOTION_API_KEY")
     if not token:
         raise SystemExit(
             "Set NOTION_API_KEY in your environment or .env before running init-notion. "
             "Do NOT pass the token on the command line."
         )
+
+    parent_page_id = _normalize_page_id(args[0])
 
     client = httpx.Client(
         base_url=_BASE_URL,

@@ -11,9 +11,14 @@ import httpx
 import pytest
 
 from procrastination_terminator.models import CSV_COLUMNS, Status, TaskType
-from procrastination_terminator.notion_init import _database_properties, init_notion
+from procrastination_terminator.notion_init import (
+    _database_properties,
+    _normalize_page_id,
+    init_notion,
+)
 
 _TOKEN = "ntn_secret_value"
+_PARENT_ID = "390e7f84dd8080afa180cb25b76bbdb0"
 
 
 def test_database_properties_match_the_model() -> None:
@@ -46,7 +51,7 @@ def test_init_creates_database_and_pages(
 ) -> None:
     monkeypatch.setenv("NOTION_API_KEY", _TOKEN)
     recorder = _Recorder()
-    init_notion(["PARENT"], transport=httpx.MockTransport(recorder.handler))
+    init_notion([_PARENT_ID], transport=httpx.MockTransport(recorder.handler))
     assert recorder.calls == [
         ("POST", "/v1/databases"),
         ("POST", "/v1/pages"),
@@ -82,5 +87,27 @@ def test_notion_error_surfaces_message_without_leaking_token(
         return httpx.Response(401, json={"message": "API token is invalid."})
 
     with pytest.raises(SystemExit, match="API token is invalid") as exc:
-        init_notion(["PARENT"], transport=httpx.MockTransport(handler))
+        init_notion([_PARENT_ID], transport=httpx.MockTransport(handler))
     assert _TOKEN not in str(exc.value)
+
+
+def test_normalize_page_id_from_copy_link_url() -> None:
+    url = "https://app.notion.com/p/Procrastination-Terminator-390e7f84dd8080afa180cb25b76bbdb0?source=copy_link"
+    assert _normalize_page_id(url) == "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+
+
+def test_normalize_page_id_from_bare_hex() -> None:
+    assert (
+        _normalize_page_id("390e7f84dd8080afa180cb25b76bbdb0")
+        == "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+    )
+
+
+def test_normalize_page_id_passes_through_dashed_uuid() -> None:
+    uuid = "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+    assert _normalize_page_id(uuid) == uuid
+
+
+def test_normalize_page_id_rejects_garbage() -> None:
+    with pytest.raises(SystemExit, match="could not find"):
+        _normalize_page_id("not-a-notion-page")
