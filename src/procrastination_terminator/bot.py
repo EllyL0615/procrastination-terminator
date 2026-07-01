@@ -523,7 +523,9 @@ class Supervisor(discord.Client):
         if target is not None:
             await self._maybe_advance(target, content)
         situation = f"The user said: {content!r}. Reply conversationally, grounded in their plan."
-        await self._say([situation], target, now.date())
+        # The logical day, not the calendar date: a chat at 01:00 still belongs to
+        # yesterday, so the PER_DAY personality only rotates at day start (SPEC §5).
+        await self._say([situation], target, daytime.logical_day_of(now, self.config.day_start))
 
     async def _modify(self, instruction: str) -> None:
         """Let the LLM edit progress.csv from a natural-language instruction (SPEC §6)."""
