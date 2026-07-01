@@ -236,6 +236,11 @@ class Supervisor(discord.Client):
             return _with_notes(
                 f"Confirm '{task.description}' is wrapping up and hand off to what's next.", task
             )
+        if action is Action.STOP_NAGGING and task.status is Status.NOT_STARTED:
+            # Window fully missed before we ever nagged it: record it as unstarted
+            # (overdue) for the day-end summary, silently -- no message (SPEC §3.2).
+            task.status = Status.OVERDUE
+            changed[task.code] = task
         return None
 
     def _handoff(
