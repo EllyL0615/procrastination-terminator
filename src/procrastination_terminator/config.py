@@ -33,7 +33,7 @@ class Config:
     day_end: time = time(23, 0)
     poll_seconds: int = 60
     personality_granularity: PersonalityGranularity = PersonalityGranularity.PER_TASK
-    message_language: str = "zh"
+    message_language: str = "en"
     dialogue_history_limit: int = 12  # recent DMs fed as context when writing a message (SPEC §4.5)
     plan_path: str = "data/plan.txt"
     progress_path: str = "data/progress.csv"
@@ -70,7 +70,7 @@ class Config:
             llm_model=_require("LLM_MODEL"),
             bot_name=os.environ.get("BOT_NAME", "Bot"),
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
-            message_language=os.environ.get("MESSAGE_LANG", "zh"),
+            message_language=os.environ.get("MESSAGE_LANG", "en"),
             dialogue_history_limit=int(os.environ.get("DIALOGUE_HISTORY", "12")),
             storage_backend=os.environ.get("STORAGE_BACKEND", "file"),
             notion_api_key=os.environ.get("NOTION_API_KEY", ""),
