@@ -20,52 +20,64 @@ need to open any inbound ports or change security rules.
 
 ## 2. Connect
 
+Point `-i` at the private key you downloaded when creating the instance (the default
+user on Ubuntu images is `ubuntu`):
+
 ```bash
-ssh ubuntu@<public-ip>      # default user on Ubuntu images is `ubuntu`
+ssh -i <path-to-private-key> ubuntu@<public-ip>
 ```
+
+On Windows PowerShell the key path uses `$env:USERPROFILE`, e.g.:
+
+```powershell
+ssh -i $env:USERPROFILE\.ssh\<your-key> ubuntu@<public-ip>
+```
+
+If your key lives in the default location (`~/.ssh/id_*`), you can drop the `-i` flag.
 
 ## 3. Install Python (via uv) and git
 
 ```bash
 sudo apt update && sudo apt install -y git
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc            # put uv on PATH
+source $HOME/.local/bin/env   # put uv on PATH (as the installer prints)
 ```
 
 ## 4. Get the code
 
 ```bash
 cd ~
-git clone <this-repository-url> procrastination-terminator
+git clone https://github.com/EllyL0615/procrastination-terminator.git
 cd procrastination-terminator
 uv sync
 ```
 
 ## 5. Configure secrets and data
 
-`.env` and `data/` are gitignored, so they don't exist on a fresh clone. Create them:
+`.env` and `data/` are gitignored, so they don't exist on a fresh clone. The easiest
+way is to prepare these files in an editor on your own machine, then `scp` them up. How
+many files you send depends on the storage backend:
+
+- **Notion mode** (`STORAGE_BACKEND=notion`) — just `.env`. Your plan, progress, and
+  context all live in Notion. See the README's
+  [Using Notion](../README.md#using-notion-optional) section.
+- **File mode** (the default) — three files: `.env`, `data/plan.txt`, and
+  `data/context.txt`. `progress.csv` / `history.csv` are created automatically.
+
+On your own machine, fill in `.env` (copy `.env.example` and edit — the `DISCORD_*`,
+`LLM_*`, and storage settings) and, in file mode, write your `data/plan.txt` and
+`data/context.txt`. Then copy them up (run locally, not on the instance):
 
 ```bash
-cp .env.example .env
-nano .env                  # fill in DISCORD_* and LLM_* (see the README's Setup section)
+# .env — everyone
+scp -i <path-to-private-key> .env ubuntu@<public-ip>:~/procrastination-terminator/.env
+
+# plan and context — file mode only
+scp -i <path-to-private-key> data/plan.txt data/context.txt \
+  ubuntu@<public-ip>:~/procrastination-terminator/data/
 ```
 
-Then choose a storage backend:
-
-- **Notion (recommended for a VPS).** Set `STORAGE_BACKEND=notion` and the `NOTION_*`
-  values in `.env`. Your plan and progress live in Notion, so nothing on the instance
-  needs backing up and a rebuilt VM loses no data. See the README's
-  [Using Notion](../README.md#using-notion-optional) section.
-- **Local files.** Leave the default `file` backend and copy your plan (and optional
-  context) up from your own machine — `progress.csv` / `history.csv` are created
-  automatically:
-
-  ```bash
-  # run on your local machine, not the instance
-  scp data/plan.txt data/context.txt ubuntu@<public-ip>:~/procrastination-terminator/data/
-  ```
-
-Confirm it runs, then stop it with Ctrl+C:
+Back on the instance, confirm it runs, then stop it with Ctrl+C:
 
 ```bash
 uv run python -m procrastination_terminator
@@ -80,6 +92,37 @@ of the README to install the systemd unit, then enable it:
 sudo systemctl enable --now procrastination-terminator
 sudo systemctl status procrastination-terminator
 ```
+
+`status` should show **active (running)**. Right after startup it's captured before the
+bot has logged in, so confirm the Discord connection from the logs:
+
+```bash
+journalctl -u procrastination-terminator -n 20 --no-pager
+```
+
+You want to see `logging in using static token` followed by `connected to Gateway`. Then
+you're done — the bot runs in the background and survives logout and reboots, so you can
+close the SSH session.
+
+## Operating the service
+
+```bash
+# Follow the logs live (Ctrl+C to stop watching; the service keeps running)
+journalctl -u procrastination-terminator -f
+
+# Restart / stop / start
+sudo systemctl restart procrastination-terminator
+sudo systemctl stop procrastination-terminator
+sudo systemctl start procrastination-terminator
+
+# Update to the latest code, then restart
+cd ~/procrastination-terminator && git pull && uv sync
+sudo systemctl restart procrastination-terminator
+```
+
+- After editing `.env`, run `sudo systemctl restart` for the change to take effect.
+- After editing your plan (the Notion `plan` page, or `data/plan.txt` in file mode),
+  send `!sync` in Discord — no restart needed.
 
 ## Using VS Code Remote-SSH (optional)
 
@@ -133,4 +176,3 @@ service keeps running on the instance regardless.
 - **Data durability.** Oracle may reclaim idle free-tier instances. In `file` mode, back
   up `data/*.csv` periodically (e.g. `scp` them down, or a cron `rsync`); in `notion`
   mode there's nothing to back up.
-- **Updating.** `cd ~/procrastination-terminator && git pull && uv sync && sudo systemctl restart procrastination-terminator`.
