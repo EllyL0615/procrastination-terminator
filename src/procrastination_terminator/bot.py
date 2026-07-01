@@ -624,11 +624,12 @@ class Supervisor(discord.Client):
     async def _debug_tick(self, arg: str) -> None:
         """Debug aid: run one supervisor tick now, or at a simulated ``HH:MM`` today.
 
-        Mirrors the real per-minute loop (boundaries + supervise) so nagging,
-        midpoint/end checks and the day-start/day-end triggers can be exercised
-        without waiting for the wall clock. Not in the SPEC; remove once testing is
-        done. It shares the loop's real side effects: a simulated 04:00 archives and
-        syncs, and firing a boundary marks it done for that calendar day.
+        Bare ``!tick`` mirrors the real per-minute loop (boundaries + supervise) at
+        the actual wall clock. With a simulated time only the supervisor decision
+        pass runs -- never the day-start/day-end boundaries, which archive, sync and
+        mark themselves done for the day: firing those at a fake time would pollute
+        the day's real state (e.g. a midday ``!tick 23:30`` would swallow that
+        night's real summary). SPEC §6.
         """
         now = datetime.now(self.config.tz)
         if arg:
@@ -638,6 +639,9 @@ class Supervisor(discord.Client):
                 await self._send("Usage: !tick [HH:MM] (omit the time to tick at now).")
                 return
             now = now.replace(hour=clock.hour, minute=clock.minute, second=0, microsecond=0)
+            await self._supervise(now)
+            await self._send(f"Ticked (supervise only) at simulated {now:%Y-%m-%d %H:%M %Z}.")
+            return
         await self._maybe_boundaries(now)
         await self._supervise(now)
         await self._send(f"Ticked at {now:%Y-%m-%d %H:%M %Z}.")
