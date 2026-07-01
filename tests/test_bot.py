@@ -1,4 +1,4 @@
-"""Behavioural tests for the ``!clear`` DM-cleanup command (SPEC §6).
+"""Behavioural tests for the ``!clear`` channel-cleanup command (SPEC §6).
 
 ``bot.py`` is integration code (SPEC §9), but ``_clear`` has enough branching --
 arg parsing, per-author selection, count vs. duration -- to be worth pinning. We
@@ -37,7 +37,7 @@ class _Msg:
 
 
 class _Channel:
-    """Fake DM channel: ``history`` streams newest-first, honouring ``after``."""
+    """Fake channel: ``history`` streams newest-first, honouring ``after``."""
 
     def __init__(self, messages: list[_Msg]) -> None:
         self._messages = messages  # newest first, as Discord returns them
@@ -71,13 +71,13 @@ class _Bot:
     def __init__(self, messages: list[_Msg]) -> None:
         self.user = _Author(BOT_ID)
         self.config = _Cfg(tz=UTC)
-        self._channel = _Channel(messages)
+        self.chan = _Channel(messages)
 
-    async def _dm_channel(self) -> _Channel:
-        return self._channel
+    async def _channel(self) -> _Channel:
+        return self.chan
 
-    async def _dm(self, text: str) -> None:
-        self._channel.sent.append(text)
+    async def _send(self, text: str, *, mention: bool = False) -> None:
+        self.chan.sent.append(text)
 
 
 def _bot_msg(minutes_ago: int = 0) -> _Msg:
@@ -99,7 +99,7 @@ def test_clear_bare_deletes_only_the_newest_bot_message() -> None:
     _run(bot, "")
 
     assert [m.deleted for m in messages] == [True, False, False, False]
-    assert bot._channel.sent[-1] == "Deleted 1 of my own message(s)."
+    assert bot.chan.sent[-1] == "Deleted 1 of my own message(s)."
 
 
 def test_clear_count_takes_newest_n_bot_messages_skipping_user_messages() -> None:
@@ -110,7 +110,7 @@ def test_clear_count_takes_newest_n_bot_messages_skipping_user_messages() -> Non
     _run(bot, "3")
 
     assert [m.deleted for m in messages] == [True, False, True, True, False, False]
-    assert bot._channel.sent[-1] == "Deleted 3 of my own message(s)."
+    assert bot.chan.sent[-1] == "Deleted 3 of my own message(s)."
 
 
 def test_clear_count_exceeding_available_deletes_what_exists() -> None:
@@ -120,7 +120,7 @@ def test_clear_count_exceeding_available_deletes_what_exists() -> None:
     _run(bot, "10")
 
     assert [m.deleted for m in messages] == [True, False, True]
-    assert bot._channel.sent[-1] == "Deleted 2 of my own message(s)."
+    assert bot.chan.sent[-1] == "Deleted 2 of my own message(s)."
 
 
 def test_clear_all_deletes_every_bot_message_and_no_user_message() -> None:
@@ -130,7 +130,7 @@ def test_clear_all_deletes_every_bot_message_and_no_user_message() -> None:
     _run(bot, "all")
 
     assert [m.deleted for m in messages] == [True, False, True, False, True]
-    assert bot._channel.sent[-1] == "Deleted 3 of my own message(s)."
+    assert bot.chan.sent[-1] == "Deleted 3 of my own message(s)."
 
 
 def test_clear_duration_deletes_only_bot_messages_inside_the_window() -> None:
@@ -146,7 +146,7 @@ def test_clear_duration_deletes_only_bot_messages_inside_the_window() -> None:
     assert recent_bot.deleted is True
     assert recent_user.deleted is False
     assert old_bot.deleted is False
-    assert bot._channel.sent[-1] == "Deleted 1 of my own message(s)."
+    assert bot.chan.sent[-1] == "Deleted 1 of my own message(s)."
 
 
 def test_clear_zero_count_reports_usage_and_deletes_nothing() -> None:
@@ -156,7 +156,7 @@ def test_clear_zero_count_reports_usage_and_deletes_nothing() -> None:
     _run(bot, "0")
 
     assert not any(m.deleted for m in messages)
-    assert bot._channel.sent == ["!clear <N> needs a positive count."]
+    assert bot.chan.sent == ["!clear <N> needs a positive count."]
 
 
 def test_clear_invalid_arg_reports_usage_and_deletes_nothing() -> None:
@@ -166,5 +166,5 @@ def test_clear_invalid_arg_reports_usage_and_deletes_nothing() -> None:
     _run(bot, "xyz")
 
     assert not any(m.deleted for m in messages)
-    assert len(bot._channel.sent) == 1
-    assert bot._channel.sent[0].startswith("Usage:")
+    assert len(bot.chan.sent) == 1
+    assert bot.chan.sent[0].startswith("Usage:")

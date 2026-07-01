@@ -1,6 +1,6 @@
 """Discord wiring (SPEC §9).
 
-discord.py carries everything: DM send/receive, the per-minute supervisor poll
+discord.py carries everything: channel send/receive, the per-minute supervisor poll
 (``ext.tasks``), and the day-start / day-end triggers (checked by time inside the
 loop, so no APScheduler). This module orchestrates the tested pure pieces
 (monitor, store, daytime, tone, plan_parser) and the LLM client.
@@ -82,12 +82,11 @@ def _start_nag_line(task: Task, *, first: bool) -> str:
 
 
 class Supervisor(discord.Client):
-    """The bot: a per-minute supervisor loop plus DM command handling."""
+    """The bot: a per-minute supervisor loop plus channel command handling."""
 
     def __init__(self, config: Config) -> None:
-        intents = discord.Intents.default()
+        intents = discord.Intents.default()  # includes guild_messages
         intents.message_content = True
-        intents.dm_messages = True
         super().__init__(intents=intents)
         self.config = config
         self.llm = LLMClient(config)
@@ -252,7 +251,7 @@ class Supervisor(discord.Client):
         try:
             parsed = build_tasks(await self.llm.parse_plan(text))
         except DuplicateCodeError as exc:
-            await self._dm(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
+            await self._send(f"plan.txt has duplicate codes: {', '.join(exc.codes)} -- please fix.")
             return
         existing = store.load(self.config.progress_path)
         plan = diff_sync(existing, parsed, _md(daytime.logical_day_of(now, self.config.day_start)))
@@ -267,8 +266,11 @@ class Supervisor(discord.Client):
     # -- incoming messages ---------------------------------------------------
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.id != self.config.discord_user_id or message.guild is not None:
-            return  # only the owner, only in DMs
+        if (
+            message.author.id != self.config.discord_user_id
+            or message.channel.id != self.config.discord_channel_id
+        ):
+            return  # only the owner, only in the bot's channel
         content = message.content.strip()
         if content.startswith("!"):
             head, _, arg = content[1:].partition(" ")
@@ -283,9 +285,9 @@ class Supervisor(discord.Client):
             await self._mark(arg, Status.COMPLETED)
         elif name == "sync":
             await self._sync_plan(datetime.now(self.config.tz))
-            await self._dm("Synced plan.txt into progress.csv.")
+            await self._send("Synced plan.txt into progress.csv.")
         elif name == "progress":
-            await self._dm(self._render_table())
+            await self._send(self._render_table())
         elif name == "modify":
             await self._modify(arg)
         elif name == "clear":
@@ -293,14 +295,14 @@ class Supervisor(discord.Client):
         elif name == "tick":
             await self._debug_tick(arg)
         else:
-            await self._dm(f"Unknown command: !{name}")
+            await self._send(f"Unknown command: !{name}")
 
     async def _mark(self, fuzzy: str, status: Status) -> None:
         tasks = store.load(self.config.progress_path)
         active = [t for t in tasks if t.type in _NAGGED_TYPES and t.status is not Status.COMPLETED]
         match = await self.llm.match_code(active, fuzzy)
         if match is None:
-            await self._dm("Which task do you mean? Try `!started <code>` / `!completed <code>`.")
+            await self._send("Which task do you mean? Try `!started <code>` / `!completed <code>`.")
             return
         now = datetime.now(self.config.tz)
         if status is Status.IN_PROGRESS:
@@ -311,7 +313,7 @@ class Supervisor(discord.Client):
             match.status = Status.COMPLETED
             match.actual_end = _now_clock(now)
         store.upsert_changed(self.config.progress_path, [match])
-        await self._dm(f"Marked '{match.description}' as {status.value}.")
+        await self._send(f"Marked '{match.description}' as {status.value}.")
 
     def _live_candidates(self, now: datetime) -> list[Task]:
         """Study/work tasks a free-chat reply could be about right now (SPEC §4.4).
@@ -349,7 +351,7 @@ class Supervisor(discord.Client):
         if len(candidates) > 1:
             target = await self.llm.match_code(candidates, content)
             if target is None:
-                await self._dm(
+                await self._send(
                     "Several tasks are active — which one do you mean? "
                     "Use `!started <code>` / `!completed <code>` to be specific."
                 )
@@ -362,7 +364,7 @@ class Supervisor(discord.Client):
     async def _modify(self, instruction: str) -> None:
         """Let the LLM edit progress.csv from a natural-language instruction (SPEC §6)."""
         if not instruction:
-            await self._dm("Tell me what to change, e.g. `!modify move RUN to 19:00`.")
+            await self._send("Tell me what to change, e.g. `!modify move RUN to 19:00`.")
             return
         tasks = store.load(self.config.progress_path)
         by_code = {t.code: t for t in tasks}
@@ -379,21 +381,22 @@ class Supervisor(discord.Client):
                     _apply_edit(task, edit)
                     touched.append(task)
         except ValueError as exc:
-            await self._dm(f"Could not apply that edit: {exc}")
+            await self._send(f"Could not apply that edit: {exc}")
             return
         if deleted:
             kept = [t for t in tasks if t.code not in deleted]
             store.write_all(self.config.progress_path, kept)
         elif touched:
             store.upsert_changed(self.config.progress_path, touched)
-        await self._dm(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
+        await self._send(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
 
     async def _clear(self, arg: str) -> None:
-        """Delete the bot's own messages in the DM (SPEC §6).
+        """Delete the bot's own messages in the channel (SPEC §6).
 
-        Discord only lets an author delete its own messages in a DM, so this
-        never touches the user's messages -- clearing the whole conversation is
-        not possible; the user removes their own half themselves. Scope by arg:
+        Filters by author, so this only removes the bot's own messages and never
+        the user's (deleting theirs would need Manage Messages, which the bot is
+        not granted; the user can delete anything manually in the channel). Scope
+        by arg:
         empty -> the most recent bot message; ``N`` -> the most recent N bot
         messages; ``30m`` / ``2h`` / ``1d`` -> bot messages sent within that
         recent window; ``all`` -> every bot message.
@@ -401,7 +404,7 @@ class Supervisor(discord.Client):
         me = self.user
         if me is None:  # not logged in yet; nothing sensible to do
             return
-        channel = await self._dm_channel()
+        channel = await self._channel()
         spec = arg.strip().lower()
 
         to_delete: list[discord.Message] = []
@@ -412,7 +415,7 @@ class Supervisor(discord.Client):
         elif spec == "" or spec.isdigit():
             want = int(spec) if spec else 1
             if want <= 0:
-                await self._dm("!clear <N> needs a positive count.")
+                await self._send("!clear <N> needs a positive count.")
                 return
             async for message in channel.history(limit=None):
                 if message.author.id == me.id:
@@ -422,7 +425,7 @@ class Supervisor(discord.Client):
         else:
             match = re.fullmatch(r"(\d+)([mhd])", spec)
             if match is None:
-                await self._dm(
+                await self._send(
                     "Usage: !clear (last one) / !clear <N> / !clear <30m|2h|1d> / !clear all."
                 )
                 return
@@ -440,7 +443,7 @@ class Supervisor(discord.Client):
 
         for message in to_delete:
             await message.delete()
-        await self._dm(f"Deleted {len(to_delete)} of my own message(s).")
+        await self._send(f"Deleted {len(to_delete)} of my own message(s).")
 
     async def _debug_tick(self, arg: str) -> None:
         """Debug aid: run one supervisor tick now, or at a simulated ``HH:MM`` today.
@@ -456,12 +459,12 @@ class Supervisor(discord.Client):
             try:
                 clock = _parse_clock(arg)
             except ValueError:
-                await self._dm("Usage: !tick [HH:MM] (omit the time to tick at now).")
+                await self._send("Usage: !tick [HH:MM] (omit the time to tick at now).")
                 return
             now = now.replace(hour=clock.hour, minute=clock.minute, second=0, microsecond=0)
         await self._maybe_boundaries(now)
         await self._supervise(now)
-        await self._dm(f"Ticked at {now:%Y-%m-%d %H:%M %Z}.")
+        await self._send(f"Ticked at {now:%Y-%m-%d %H:%M %Z}.")
 
     async def _maybe_advance(self, task: Task, content: str) -> None:
         now = datetime.now(self.config.tz)
@@ -502,7 +505,7 @@ class Supervisor(discord.Client):
         text = await self.llm.generate_message(
             " ".join(situations), personality=personality, intensity=intensity, history=history
         )
-        await self._dm(text)
+        await self._send(text, mention=True)
 
     def _personality(self, task: Task | None, day: date) -> Personality:
         if self.config.personality_granularity is PersonalityGranularity.PER_MESSAGE:
@@ -513,19 +516,23 @@ class Supervisor(discord.Client):
             self.config.personality_granularity, code=task.code, day=_md(day)
         )
 
-    async def _dm_channel(self) -> discord.DMChannel:
-        user = self.get_user(self.config.discord_user_id) or await self.fetch_user(
-            self.config.discord_user_id
-        )
-        return user.dm_channel or await user.create_dm()
+    async def _channel(self) -> discord.abc.Messageable:
+        channel = self.get_channel(self.config.discord_channel_id)
+        if channel is None:
+            channel = await self.fetch_channel(self.config.discord_channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            raise RuntimeError(
+                f"DISCORD_CHANNEL_ID {self.config.discord_channel_id} is not a text channel"
+            )
+        return channel
 
     async def _recent_dialogue(self) -> list[dict[str, str]]:
-        """Recent DM turns (oldest first) as chat messages, so generated wording can
+        """Recent channel turns (oldest first) as chat messages, so generated wording can
         honor the user's in-conversation corrections. This grounds *wording* only; the
         monitor's decisions stay file+time based and memoryless (SPEC §3.2, §4.5). How
         many turns is ``config.dialogue_history_limit`` (env ``DIALOGUE_HISTORY``).
         """
-        channel = await self._dm_channel()
+        channel = await self._channel()
         turns: list[dict[str, str]] = []
         async for message in channel.history(limit=self.config.dialogue_history_limit):
             content = message.content.strip()
@@ -536,8 +543,10 @@ class Supervisor(discord.Client):
         turns.reverse()
         return turns
 
-    async def _dm(self, text: str) -> None:
-        channel = await self._dm_channel()
+    async def _send(self, text: str, *, mention: bool = False) -> None:
+        channel = await self._channel()
+        if mention:  # channels default to notifying only on @mention, so ping to nag
+            text = f"<@{self.config.discord_user_id}>\n{text}"
         await channel.send(text)
 
 

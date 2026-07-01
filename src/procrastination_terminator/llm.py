@@ -164,16 +164,16 @@ class LLMClient:
 
         ``situation`` describes what to say (built by the bot); this applies the
         persona, escalation ``intensity`` (0 = mild), and the configured language.
-        ``history`` is the recent DM conversation (oldest first); it grounds the
+        ``history`` is the recent channel conversation (oldest first); it grounds the
         wording so an in-chat correction the user just made is honored (SPEC §4.5).
         """
         language = _LANGUAGE_NAME.get(self._config.message_language, self._config.message_language)
         system = (
-            f"You are {self._config.bot_name}, a study accountability bot DMing one user. "
+            f"You are {self._config.bot_name}, a study accountability bot nudging one user. "
             f"Write a single short message in {language}. "
             f"Persona: {_PERSONA[personality]}. "
             f"Forcefulness: {intensity} (0 = mild, higher = more intense). "
-            "The turns before this are your recent DM history with the user; honor any "
+            "The turns before this are your recent chat history with the user; honor any "
             "correction or clarification they made there (e.g. what a task really is). "
             "Output only the message text."
         )

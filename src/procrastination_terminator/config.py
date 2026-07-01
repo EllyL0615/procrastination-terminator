@@ -23,6 +23,7 @@ class Config:
 
     discord_token: str
     discord_user_id: int
+    discord_channel_id: int
     llm_api_key: str
     llm_base_url: str
     llm_model: str
@@ -56,6 +57,7 @@ class Config:
         return cls(
             discord_token=_require("DISCORD_TOKEN"),
             discord_user_id=int(_require("DISCORD_USER_ID")),
+            discord_channel_id=int(_require("DISCORD_CHANNEL_ID")),
             llm_api_key=_require("LLM_API_KEY"),
             llm_base_url=_require("LLM_BASE_URL"),
             llm_model=_require("LLM_MODEL"),
