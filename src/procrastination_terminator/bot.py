@@ -101,6 +101,13 @@ def _with_notes(line: str, task: Task) -> str:
     return f"{line} (Task notes from the plan: {task.notes}.)" if task.notes else line
 
 
+# ADHD "how to start" breakdown; shared by the start-nag's first nudge and !whattodo.
+_STEP_BREAKDOWN = (
+    "a concrete, practical way to switch in and begin, broken into 3 to 5 tiny "
+    "do-it-now steps (no more than 5), each achievable."
+)
+
+
 def _start_nag_line(task: Task, *, first: bool) -> str:
     """Situation text for a start-nag (SPEC §4.1).
 
@@ -118,10 +125,7 @@ def _start_nag_line(task: Task, *, first: bool) -> str:
         "action and ask them to report back once they've started."
     )
     if first:
-        line += (
-            " First nudge: also give a concrete, practical way to switch in and begin, "
-            "broken into 3 to 5 tiny do-it-now steps (no more than 5), each achievable."
-        )
+        line += " First nudge: also give " + _STEP_BREAKDOWN
     else:
         line += " Keep it brief -- just help them take that first step."
     return _with_notes(line, task)
@@ -362,6 +366,8 @@ class Supervisor(discord.Client):
                 await self._show_progress()  # show the result, else it is invisible
         elif name == "progress":
             await self._show_progress()
+        elif name == "whattodo":
+            await self._whattodo(arg)
         elif name == "modify":
             await self._modify(arg)
         elif name == "clear":
@@ -388,6 +394,42 @@ class Supervisor(discord.Client):
             match.actual_end = _now_clock(now)
         store.upsert_changed(self.config.progress_path, [match])
         await self._send(f"Marked '{match.description}' as {status.value}.")
+
+    async def _whattodo(self, fuzzy: str) -> None:
+        """Break a task into 3-5 do-it-now steps on demand (SPEC §6).
+
+        No argument -> the task whose window contains now; a fuzzy code -> the
+        matching study/work task. It reuses the start-nag's step breakdown (SPEC
+        §4.1) but is user-triggered and read-only -- it changes no file.
+        """
+        now = datetime.now(self.config.tz)
+        today = daytime.logical_day_of(now, self.config.day_start)
+        if fuzzy:
+            tasks = [t for t in store.load(self.config.progress_path) if t.type in _NAGGED_TYPES]
+            task = await self.llm.match_code(tasks, fuzzy)
+            if task is None:
+                await self._send("Which task do you mean? Try `!whattodo <code>`.")
+                return
+        else:
+            task = self._current_task(now, today)
+            if task is None:
+                await self._send(
+                    "No study/work task is active right now -- name one: `!whattodo <code>`."
+                )
+                return
+        situation = _with_notes(
+            f"The user asked how to get started on '{task.description}' (code {task.code}). "
+            "They have ADHD and find it hard to begin, so give " + _STEP_BREAKDOWN,
+            task,
+        )
+        await self._say([situation], task, today)
+
+    def _current_task(self, now: datetime, today: date) -> Task | None:
+        """The nagged task whose planned window contains ``now``, if any (SPEC §4.1)."""
+        for task, start, end in self._resolve_day(now, today):
+            if task.type in _NAGGED_TYPES and start <= now < end:
+                return task
+        return None
 
     def _live_candidates(self, now: datetime) -> list[Task]:
         """Study/work tasks a free-chat reply could be about right now (SPEC §4.4).
