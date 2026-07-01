@@ -56,6 +56,30 @@ def _apply_edit(task: Task, edit: dict[str, str]) -> None:
         task.status = Status(edit["status"])
 
 
+def _start_nag_line(task: Task, *, first: bool) -> str:
+    """Situation text for a start-nag (SPEC §4.1).
+
+    The user has ADHD and struggles to initiate/switch tasks, so every start-nag --
+    whatever the persona -- gives one concrete first action and asks them to report
+    back once they've started. The first nag also adds a practical way to switch in
+    and begin, broken into 3-5 tiny steps (a concrete count, since "keep it short" is
+    too vague for the model to act on); later nags stay light and just help them take
+    that first step. Wording is grounded in the recent conversation by
+    ``generate_message``, so a correction the user made about the task is honored here.
+    """
+    line = (
+        f"Nag the user to start '{task.description}' (code {task.code}). "
+        "They have ADHD and find it hard to begin, so give one concrete, doable first "
+        "action and ask them to report back once they've started."
+    )
+    if first:
+        return line + (
+            " First nudge: also give a concrete, practical way to switch in and begin, "
+            "broken into 3 to 5 tiny do-it-now steps (no more than 5), each achievable."
+        )
+    return line + " Keep it brief -- just help them take that first step."
+
+
 class Supervisor(discord.Client):
     """The bot: a per-minute supervisor loop plus DM command handling."""
 
@@ -145,10 +169,11 @@ class Supervisor(discord.Client):
     ) -> str | None:
         """Apply a decision's side effects to ``task``; return the message line, if any."""
         if action is Action.NAG_START:
-            if task.status is Status.NOT_STARTED:
+            first = task.status is Status.NOT_STARTED  # this tick is its very first nag
+            if first:
                 task.status = Status.OVERDUE
                 changed[task.code] = task
-            return f"Nag the user to start '{task.description}' (code {task.code})."
+            return _start_nag_line(task, first=first)
         if action is Action.MIDPOINT_CHECK:
             self._mark_awaiting(task, now)
             changed[task.code] = task
@@ -181,7 +206,9 @@ class Supervisor(discord.Client):
             return None
         nxt.status = Status.OVERDUE
         changed[nxt.code] = nxt
-        return f"Then start the next task '{nxt.description}' (code {nxt.code})."
+        # The handoff doubles as the next task's first nag, so give it the full
+        # start guidance (SPEC §4.1, §4.2).
+        return "Then get them onto the next task. " + _start_nag_line(nxt, first=True)
 
     def _mark_awaiting(self, task: Task, now: datetime) -> None:
         task.latest_progress = _AWAITING
@@ -260,6 +287,8 @@ class Supervisor(discord.Client):
             await self._dm(self._render_table())
         elif name == "modify":
             await self._modify(arg)
+        elif name == "tick":
+            await self._debug_tick(arg)
         else:
             await self._dm(f"Unknown command: !{name}")
 
@@ -281,16 +310,51 @@ class Supervisor(discord.Client):
         store.upsert_changed(self.config.progress_path, [match])
         await self._dm(f"Marked '{match.description}' as {status.value}.")
 
+    def _live_candidates(self, now: datetime) -> list[Task]:
+        """Study/work tasks a free-chat reply could be about right now (SPEC §4.4).
+
+        A task is a candidate while it is overdue or in_progress AND either still in
+        its window (``now`` before its planned end) or still awaiting a reply to a
+        check we sent -- the latter keeps a just-past-end task in play so a late reply
+        to its end-check is not dropped. A task past its end whose check was already
+        answered is parked until the day-end summary and no longer competes (this is
+        why an earlier task stops being a candidate once you move on to the next).
+        not_started and completed tasks are never candidates.
+        """
+        today = daytime.logical_day_of(now, self.config.day_start)
+        candidates: list[Task] = []
+        for task, _start, end in self._resolve_day(now, today):
+            if task.type not in _NAGGED_TYPES or task.status not in (
+                Status.OVERDUE,
+                Status.IN_PROGRESS,
+            ):
+                continue
+            if now < end or task.latest_progress == _AWAITING:
+                candidates.append(task)
+        return candidates
+
     async def _free_chat(self, content: str) -> None:
-        """Plain chat; for a single active task, let the LLM advance its state (SPEC §6, B2)."""
-        tasks = store.load(self.config.progress_path)
-        active = [t for t in tasks if t.type in _NAGGED_TYPES and t.status is not Status.COMPLETED]
-        if len(active) == 1:
-            await self._maybe_advance(active[0], content)
+        """Plain chat; attribute the reply to the live task and advance it (SPEC §6, §4.4).
+
+        One live task -> advance it (start / record progress / complete). Several ->
+        match the reply to one; if it stays ambiguous, ask rather than guess. None ->
+        pure chat.
+        """
+        now = datetime.now(self.config.tz)
+        candidates = self._live_candidates(now)
+        target: Task | None = candidates[0] if len(candidates) == 1 else None
+        if len(candidates) > 1:
+            target = await self.llm.match_code(candidates, content)
+            if target is None:
+                await self._dm(
+                    "Several tasks are active — which one do you mean? "
+                    "Use `!started <code>` / `!completed <code>` to be specific."
+                )
+                return
+        if target is not None:
+            await self._maybe_advance(target, content)
         situation = f"The user said: {content!r}. Reply conversationally, grounded in their plan."
-        await self._say(
-            [situation], active[0] if active else None, datetime.now(self.config.tz).date()
-        )
+        await self._say([situation], target, now.date())
 
     async def _modify(self, instruction: str) -> None:
         """Let the LLM edit progress.csv from a natural-language instruction (SPEC §6)."""
@@ -321,16 +385,47 @@ class Supervisor(discord.Client):
             store.upsert_changed(self.config.progress_path, touched)
         await self._dm(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
 
+    async def _debug_tick(self, arg: str) -> None:
+        """Debug aid: run one supervisor tick now, or at a simulated ``HH:MM`` today.
+
+        Mirrors the real per-minute loop (boundaries + supervise) so nagging,
+        midpoint/end checks and the day-start/day-end triggers can be exercised
+        without waiting for the wall clock. Not in the SPEC; remove once testing is
+        done. It shares the loop's real side effects: a simulated 04:00 archives and
+        syncs, and firing a boundary marks it done for that calendar day.
+        """
+        now = datetime.now(self.config.tz)
+        if arg:
+            try:
+                clock = _parse_clock(arg)
+            except ValueError:
+                await self._dm("Usage: !tick [HH:MM] (omit the time to tick at now).")
+                return
+            now = now.replace(hour=clock.hour, minute=clock.minute, second=0, microsecond=0)
+        await self._maybe_boundaries(now)
+        await self._supervise(now)
+        await self._dm(f"Ticked at {now:%Y-%m-%d %H:%M %Z}.")
+
     async def _maybe_advance(self, task: Task, content: str) -> None:
         now = datetime.now(self.config.tz)
-        if task.status is Status.OVERDUE and await self.llm.judge_started(task, content):
-            task.status = Status.IN_PROGRESS
-            task.actual_start = _now_clock(now)
-            task.latest_progress_time = now.isoformat()
-            store.upsert_changed(self.config.progress_path, [task])
-        elif task.status is Status.IN_PROGRESS and await self.llm.judge_completed(task, content):
-            task.status = Status.COMPLETED
-            task.actual_end = _now_clock(now)
+        if task.status is Status.OVERDUE:
+            if await self.llm.judge_started(task, content):
+                task.status = Status.IN_PROGRESS
+                task.actual_start = _now_clock(now)
+                task.latest_progress_time = now.isoformat()
+                store.upsert_changed(self.config.progress_path, [task])
+        elif task.status is Status.IN_PROGRESS:
+            kind = await self.llm.classify_progress_reply(task, content)
+            if kind == "completed":
+                task.status = Status.COMPLETED
+                task.actual_end = _now_clock(now)
+            elif kind == "progress":
+                # A real progress update: record it, replacing the "awaiting reply"
+                # placeholder and refreshing the dedup timestamp (SPEC §4.2).
+                task.latest_progress = await self.llm.condense_progress(content)
+                task.latest_progress_time = now.isoformat()
+            else:
+                return  # off-topic chat: leave the file untouched (SPEC §6)
             store.upsert_changed(self.config.progress_path, [task])
 
     def _render_table(self) -> str:

@@ -10,12 +10,15 @@ gateway, etc.); the endpoint, model, and message language come from config.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from .config import Config
 from .models import Personality, Task, TaskType
+
+# Outcome of classifying an in-progress task's reply (SPEC §4.2, §6).
+ReplyKind = Literal["completed", "progress", "chat"]
 
 _PERSONA: dict[Personality, str] = {
     Personality.GENTLE: "gentle and encouraging",
@@ -75,21 +78,45 @@ class LLMClient:
         return TaskType(_extract_json(content)["type"])
 
     async def judge_started(self, task: Task, reply: str) -> bool:
-        """Judge whether the user's reply means they actually started (SPEC §4.1)."""
+        """Judge, with a high bar, whether the reply shows the user really started (SPEC §4.1)."""
         return await self._judge_bool(
             f"The user was nagged to start the task: {task.description!r}. "
-            "Did they actually start (not just acknowledge or stall)? "
-            'Reply as JSON: {"yes": true|false}.',
+            "Answer yes only if the message clearly shows they have actually begun focusing "
+            "on it -- not merely acknowledging, agreeing, or saying they will soon. If in "
+            'doubt, answer no. Reply as JSON: {"yes": true|false}.',
             reply,
         )
 
-    async def judge_completed(self, task: Task, reply: str) -> bool:
-        """Judge whether the user's reply means the task is done (SPEC §4.2)."""
-        return await self._judge_bool(
-            f"The user is working on the task: {task.description!r}. "
-            'Does their reply mean it is finished? Reply as JSON: {"yes": true|false}.',
+    async def classify_progress_reply(self, task: Task, reply: str) -> ReplyKind:
+        """Classify an in-progress task's reply in one call (SPEC §4.2, §6).
+
+        ``"completed"`` = the task is finished; ``"progress"`` = SUBSTANTIVE new info
+        about the task (what is done, how far along, a specific blocker) worth
+        recording; ``"chat"`` = everything else, including bare acknowledgements,
+        promises, or intentions ("I'll focus") that carry no concrete progress -- so a
+        vague reply never overwrites a real one. Unknown output falls back to ``"chat"``
+        (safe: leaves the file untouched).
+        """
+        content = await self._chat(
+            f"The user is working on the task: {task.description!r}. Classify their message.\n"
+            '- "completed": it clearly means the task is finished.\n'
+            '- "progress": it reports substantive new information about how the task itself '
+            "is going -- what they have done, how far along they are, or a specific obstacle. "
+            "It must carry real content worth recording.\n"
+            '- "chat": everything else -- acknowledgements, promises, or intentions to work '
+            '("ok", "I will focus now", "I will do it properly"), reactions to you, mood, '
+            "small talk, or off-topic. A vague promise with no concrete task detail is chat, "
+            "NOT progress.\n"
+            'Reply as JSON: {"kind": "completed" | "progress" | "chat"}.',
             reply,
+            json_mode=True,
         )
+        kind = str(_extract_json(content).get("kind", "")).lower()
+        if kind == "completed":
+            return "completed"
+        if kind == "progress":
+            return "progress"
+        return "chat"
 
     async def _judge_bool(self, system: str, reply: str) -> bool:
         content = await self._chat(system, reply, json_mode=True)
