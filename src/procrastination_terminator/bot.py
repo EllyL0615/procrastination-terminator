@@ -12,6 +12,7 @@ a live Discord + LLM; the decision logic they call is unit-tested elsewhere.
 from __future__ import annotations
 
 import random
+import re
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -287,6 +288,8 @@ class Supervisor(discord.Client):
             await self._dm(self._render_table())
         elif name == "modify":
             await self._modify(arg)
+        elif name == "clear":
+            await self._clear(arg)
         elif name == "tick":
             await self._debug_tick(arg)
         else:
@@ -384,6 +387,60 @@ class Supervisor(discord.Client):
         elif touched:
             store.upsert_changed(self.config.progress_path, touched)
         await self._dm(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
+
+    async def _clear(self, arg: str) -> None:
+        """Delete the bot's own messages in the DM (SPEC §6).
+
+        Discord only lets an author delete its own messages in a DM, so this
+        never touches the user's messages -- clearing the whole conversation is
+        not possible; the user removes their own half themselves. Scope by arg:
+        empty -> the most recent bot message; ``N`` -> the most recent N bot
+        messages; ``30m`` / ``2h`` / ``1d`` -> bot messages sent within that
+        recent window; ``all`` -> every bot message.
+        """
+        me = self.user
+        if me is None:  # not logged in yet; nothing sensible to do
+            return
+        channel = await self._dm_channel()
+        spec = arg.strip().lower()
+
+        to_delete: list[discord.Message] = []
+        if spec == "all":
+            async for message in channel.history(limit=None):
+                if message.author.id == me.id:
+                    to_delete.append(message)
+        elif spec == "" or spec.isdigit():
+            want = int(spec) if spec else 1
+            if want <= 0:
+                await self._dm("!clear <N> needs a positive count.")
+                return
+            async for message in channel.history(limit=None):
+                if message.author.id == me.id:
+                    to_delete.append(message)
+                    if len(to_delete) >= want:
+                        break
+        else:
+            match = re.fullmatch(r"(\d+)([mhd])", spec)
+            if match is None:
+                await self._dm(
+                    "Usage: !clear (last one) / !clear <N> / !clear <30m|2h|1d> / !clear all."
+                )
+                return
+            amount = int(match.group(1))
+            unit = match.group(2)
+            delta = {
+                "m": timedelta(minutes=amount),
+                "h": timedelta(hours=amount),
+                "d": timedelta(days=amount),
+            }[unit]
+            cutoff = datetime.now(self.config.tz) - delta
+            async for message in channel.history(limit=None, after=cutoff):
+                if message.author.id == me.id:
+                    to_delete.append(message)
+
+        for message in to_delete:
+            await message.delete()
+        await self._dm(f"Deleted {len(to_delete)} of my own message(s).")
 
     async def _debug_tick(self, arg: str) -> None:
         """Debug aid: run one supervisor tick now, or at a simulated ``HH:MM`` today.
