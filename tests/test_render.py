@@ -20,7 +20,7 @@ def test_fit_pads_ascii_to_display_width() -> None:
 
 
 def test_fit_truncates_ascii_with_marker() -> None:
-    assert _fit("Game Chapter", 8) == "Game Ch~"
+    assert _fit("Game Chapter", 8) == "Game Ch…"
 
 
 def test_fit_pads_cjk_by_display_width() -> None:
@@ -32,12 +32,12 @@ def test_fit_pads_cjk_by_display_width() -> None:
 def test_fit_truncates_cjk_without_overflowing_the_cell() -> None:
     fitted = _fit("起床早餐老婆饼", 6)  # 14 columns of CJK into a 6-column cell
     assert _disp_width(fitted) == 6  # cell stays exactly 6 columns wide
-    assert "~" in fitted  # and it is marked as truncated
+    assert "…" in fitted  # and it is marked as truncated
 
 
 def test_fit_handles_a_wide_glyph_that_cannot_fit() -> None:
     # A single wide glyph into a width-1 cell degrades to just the truncation mark.
-    assert _fit("睡", 1) == "~"
+    assert _fit("睡", 1) == "…"
 
 
 def test_fit_folds_fullwidth_punctuation_to_ascii() -> None:
@@ -53,4 +53,4 @@ def test_fit_truncation_leaves_no_space_before_the_mark() -> None:
     # The trailing space where the cut lands is stripped so the mark hugs the text,
     # and the fullwidth paren/colon in the input fold to ASCII.
     text = f"起床{_FW_LPAREN}早餐{_FW_COLON}老婆饼 吃药{_FW_RPAREN}"
-    assert _fit(text, 18) == "起床(早餐:老婆饼~ "
+    assert _fit(text, 18) == "起床(早餐:老婆饼… "

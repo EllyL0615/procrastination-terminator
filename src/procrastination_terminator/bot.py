@@ -32,7 +32,8 @@ _NAGGED_TYPES = (TaskType.STUDY, TaskType.WORK)
 
 # Compact, fixed-ish status labels for the !progress table (SPEC §6).
 _DISCORD_LIMIT = 2000  # max characters per message
-_TRUNCATE_MARK = "~"  # ASCII, so its width is stable across fonts (unlike "…")
+_TRUNCATE_MARK = "…"  # single-column per _disp_width (East-Asian "ambiguous"), and
+# Discord's monospace code block renders it narrow, so alignment still holds
 
 
 def _disp_width(text: str) -> int:
@@ -41,7 +42,7 @@ def _disp_width(text: str) -> int:
 
 
 def _fit(text: str, width: int) -> str:
-    """Truncate ``text`` to ``width`` display columns (``~`` if cut), then right-pad.
+    """Truncate ``text`` to ``width`` display columns (``…`` if cut), then right-pad.
 
     ``text`` is NFKC-normalized first, folding fullwidth punctuation (fullwidth parens,
     colon, etc.) to their ASCII forms: many monospace fonts draw fullwidth *punctuation*
