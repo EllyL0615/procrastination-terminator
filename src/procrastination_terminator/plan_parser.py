@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import time
 
+from . import daytime
 from .models import Status, Task, TaskType
 
 
@@ -47,16 +49,21 @@ def find_duplicate_codes(tasks: list[Task]) -> list[str]:
     return list(seen)
 
 
-def build_tasks(entries: list[dict[str, str]]) -> list[Task]:
+def build_tasks(entries: list[dict[str, str]], day_start: time = time(4, 0)) -> list[Task]:
     """Assemble Task rows from raw LLM-extracted plan entries (pure).
 
     Each entry has ``date`` (``MM.DD``), ``time`` (``HH:MM`` start), ``subject``
-    (short code), ``description``, and ``type``. Entries are ordered by date+time;
-    each task's ``planned_end`` is the next same-day task's start (SPEC §2), and
-    the day's last task ends at its own start (it is only a boundary, never
-    nagged). Raises :class:`DuplicateCodeError` on a repeated code (SPEC §3.1, C2).
+    (short code), ``description``, and ``type``. Entries are ordered by date then
+    *logical-day* time (SPEC §5), so an after-midnight task like ``00:00`` sleep
+    sorts to the end of its day, not the start. Each task's ``planned_end`` is the
+    next same-day task's start (SPEC §2), and the day's last task ends at its own
+    start (it is only a boundary, never nagged). Raises :class:`DuplicateCodeError`
+    on a repeated code (SPEC §3.1, C2).
     """
-    ordered = sorted(entries, key=lambda e: (e["date"], e["time"]))
+    ordered = sorted(
+        entries,
+        key=lambda e: (e["date"], daytime.logical_order(daytime.parse_clock(e["time"]), day_start)),
+    )
     tasks: list[Task] = []
     for i, entry in enumerate(ordered):
         date, start = entry["date"], entry["time"]

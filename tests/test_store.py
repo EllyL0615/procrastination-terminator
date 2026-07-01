@@ -80,6 +80,38 @@ def test_upsert_preserves_unrelated_rows(tmp_path: Path) -> None:
     assert loaded["0313-1800-RUN"] == b
 
 
+def _timed(code: str, date: str, start: str, end: str) -> Task:
+    t = task(code, date)
+    t.planned_start, t.planned_end = start, end
+    return t
+
+
+def test_write_all_orders_rows_chronologically_with_midnight_last(tmp_path: Path) -> None:
+    path = str(tmp_path / "progress.csv")
+    # Deliberately scrambled, with an after-midnight sleep task written in the middle.
+    store.write_all(
+        path,
+        [
+            _timed("0701-1000-REVISE", "07.01", "10:00", "00:00"),
+            _timed("0701-0000-SLEEP", "07.01", "00:00", "00:00"),
+            _timed("0701-0530-LOGIC", "07.01", "05:30", "07:00"),
+        ],
+    )
+    # 00:00 sleep is the logical day's tail, so it lands last despite the small clock.
+    assert [t.code for t in store.load(path)] == [
+        "0701-0530-LOGIC",
+        "0701-1000-REVISE",
+        "0701-0000-SLEEP",
+    ]
+
+
+def test_upsert_keeps_file_chronologically_ordered(tmp_path: Path) -> None:
+    path = str(tmp_path / "progress.csv")
+    store.upsert_changed(path, [_timed("0701-1000-REVISE", "07.01", "10:00", "00:00")])
+    store.upsert_changed(path, [_timed("0701-0530-LOGIC", "07.01", "05:30", "07:00")])
+    assert [t.code for t in store.load(path)] == ["0701-0530-LOGIC", "0701-1000-REVISE"]
+
+
 def test_archive_past_moves_old_rows(tmp_path: Path) -> None:
     progress = str(tmp_path / "progress.csv")
     history = str(tmp_path / "history.csv")

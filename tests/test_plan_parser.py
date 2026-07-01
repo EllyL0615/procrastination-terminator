@@ -102,6 +102,38 @@ def test_build_tasks_does_not_chain_across_days() -> None:
     assert tasks[0].planned_end == "22:00"  # last of its day, no next same-day task
 
 
+def test_build_tasks_after_midnight_task_sorts_to_end_of_logical_day() -> None:
+    # 00:00 sleep is the *after-midnight* tail of 03.13's logical day (SPEC §5), so it
+    # must sort last -- not first -- and it is the day's boundary task (start == end).
+    tasks = build_tasks(
+        [
+            entry("03.13", "10:00", "PGM"),
+            entry("03.13", "00:00", "SLEEP"),  # midnight, logically the day's last
+        ]
+    )
+    assert [t.code for t in tasks] == ["0313-1000-PGM", "0313-0000-SLEEP"]
+    assert tasks[0].planned_end == "00:00"  # PGM runs until sleep begins, not 10:00-10:00
+    assert tasks[1].planned_end == "00:00"  # sleep is the boundary: start == end
+
+
+def test_build_tasks_full_day_with_midnight_boundary() -> None:
+    # The reported bug: a plan whose last written line is 00:00 sleep.
+    tasks = build_tasks(
+        [
+            entry("07.01", "05:30", "LOGIC"),
+            entry("07.01", "07:00", "QUANTUM"),
+            entry("07.01", "10:00", "REVISE"),
+            entry("07.01", "00:00", "SLEEP"),
+        ]
+    )
+    assert [(t.planned_start, t.planned_end) for t in tasks] == [
+        ("05:30", "07:00"),
+        ("07:00", "10:00"),
+        ("10:00", "00:00"),
+        ("00:00", "00:00"),
+    ]
+
+
 def test_build_tasks_rejects_duplicate_code() -> None:
     with pytest.raises(DuplicateCodeError):
         build_tasks([entry("03.13", "14:00", "PGM"), entry("03.13", "14:00", "PGM")])
