@@ -224,8 +224,13 @@ All settings live in `.env`. Only the first group is required.
 | `LLM_MODEL` | Yes | The model name, e.g. `deepseek-v4-flash`. |
 | `BOT_NAME` | No | What the bot calls itself (default: `Bot`). |
 | `TIMEZONE` | No | IANA timezone name, e.g. `Europe/London` (default). Handles daylight saving automatically. |
+| `DAY_START` | No | Daily sync time and logical-day boundary, `HH:MM` (default: `04:00`). |
+| `DAY_END` | No | Daily summary + plan nag time, `HH:MM` (default: `23:00`). Must not pass `DAY_START`. |
+| `POLL_SECONDS` | No | Supervisor poll interval in seconds (default: `60`). |
+| `PERSONALITY_GRANULARITY` | No | How often the message personality is re-chosen: `per_task` (default), `per_message`, or `per_day`. |
 | `MESSAGE_LANG` | No | Language of the bot's messages: `zh` or `en` (default: `en`). |
 | `DIALOGUE_HISTORY` | No | How many recent messages to use as conversational context (default: `12`). |
+| `PLAN_PATH`, `PROGRESS_PATH`, `HISTORY_PATH`, `CONTEXT_PATH` | No | File-backend data file locations (defaults under `data/`). |
 | `STORAGE_BACKEND` | No | `file` (default) or `notion`. |
 | `NOTION_API_KEY`, `NOTION_DB_ID`, `NOTION_PLAN_PAGE_ID`, `NOTION_CONTEXT_PAGE_ID` | If `notion` | See [Using Notion](#using-notion-optional). |
 

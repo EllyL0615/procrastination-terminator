@@ -70,8 +70,18 @@ class Config:
             llm_model=_require("LLM_MODEL"),
             bot_name=os.environ.get("BOT_NAME", "Bot"),
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
+            day_start=time.fromisoformat(os.environ.get("DAY_START", "04:00")),
+            day_end=time.fromisoformat(os.environ.get("DAY_END", "23:00")),
+            poll_seconds=int(os.environ.get("POLL_SECONDS", "60")),
+            personality_granularity=PersonalityGranularity(
+                os.environ.get("PERSONALITY_GRANULARITY", "per_task")
+            ),
             message_language=os.environ.get("MESSAGE_LANG", "en"),
             dialogue_history_limit=int(os.environ.get("DIALOGUE_HISTORY", "12")),
+            plan_path=os.environ.get("PLAN_PATH", "data/plan.txt"),
+            progress_path=os.environ.get("PROGRESS_PATH", "data/progress.csv"),
+            history_path=os.environ.get("HISTORY_PATH", "data/history.csv"),
+            context_path=os.environ.get("CONTEXT_PATH", "data/context.txt"),
             storage_backend=os.environ.get("STORAGE_BACKEND", "file"),
             notion_api_key=os.environ.get("NOTION_API_KEY", ""),
             notion_db_id=os.environ.get("NOTION_DB_ID", ""),
