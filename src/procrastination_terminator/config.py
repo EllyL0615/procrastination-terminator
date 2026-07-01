@@ -39,6 +39,12 @@ class Config:
     progress_path: str = "data/progress.csv"
     history_path: str = "data/history.csv"
     context_path: str = "data/context.txt"  # user-written free-form notes fed to the LLM (SPEC §2)
+    # Storage backend (SPEC §9): "file" (local, default) or "notion".
+    storage_backend: str = "file"
+    notion_api_key: str = ""
+    notion_db_id: str = ""
+    notion_plan_page_id: str = ""
+    notion_context_page_id: str = ""
 
     @property
     def tz(self) -> ZoneInfo:
@@ -66,4 +72,9 @@ class Config:
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
             message_language=os.environ.get("MESSAGE_LANG", "zh"),
             dialogue_history_limit=int(os.environ.get("DIALOGUE_HISTORY", "12")),
+            storage_backend=os.environ.get("STORAGE_BACKEND", "file"),
+            notion_api_key=os.environ.get("NOTION_API_KEY", ""),
+            notion_db_id=os.environ.get("NOTION_DB_ID", ""),
+            notion_plan_page_id=os.environ.get("NOTION_PLAN_PAGE_ID", ""),
+            notion_context_page_id=os.environ.get("NOTION_CONTEXT_PAGE_ID", ""),
         )
