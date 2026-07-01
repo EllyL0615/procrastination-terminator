@@ -31,6 +31,19 @@ def _subject(description: str) -> str:
     return match.group(0).upper() if match else "TASK"
 
 
+def _code_clock(start: str, day_start: time) -> str:
+    """Time field for a task's ``code`` (SPEC §2, §5).
+
+    Carries a before-day-start hour as 24-27 so the code's ``HHMM`` sorts in
+    logical-day order: with a 04:00 day start, ``01:00`` (early morning, the tail of
+    the logical day) becomes ``2500``, sorting after the evening's ``2300``. Rows are
+    ordered purely by ``code``, so this is what puts an after-midnight task last.
+    """
+    clock = daytime.parse_clock(start)
+    hour = clock.hour + 24 if clock < day_start else clock.hour
+    return f"{hour:02d}{clock.minute:02d}"
+
+
 def parse_plan_text(text: str) -> list[dict[str, str]]:
     """Deterministically extract the task backbone from plan.txt (SPEC §2, §9).
 
@@ -126,7 +139,7 @@ def build_tasks(entries: list[dict[str, str]], day_start: time = time(4, 0)) -> 
         date, start = entry["date"], entry["time"]
         nxt = ordered[i + 1] if i + 1 < len(ordered) else None
         end = nxt["time"] if nxt is not None and nxt["date"] == date else start
-        code = f"{date.replace('.', '')}-{start.replace(':', '')}-{entry['subject']}"
+        code = f"{date.replace('.', '')}-{_code_clock(start, day_start)}-{entry['subject']}"
         tasks.append(
             Task(
                 code=code,

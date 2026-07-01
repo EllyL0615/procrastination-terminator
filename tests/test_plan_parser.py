@@ -112,9 +112,18 @@ def test_build_tasks_after_midnight_task_sorts_to_end_of_logical_day() -> None:
             entry("03.13", "00:00", "SLEEP"),  # midnight, logically the day's last
         ]
     )
-    assert [t.code for t in tasks] == ["0313-1000-PGM", "0313-0000-SLEEP"]
+    assert [t.code for t in tasks] == ["0313-1000-PGM", "0313-2400-SLEEP"]
     assert tasks[0].planned_end == "00:00"  # PGM runs until sleep begins, not 10:00-10:00
     assert tasks[1].planned_end == "00:00"  # sleep is the boundary: start == end
+
+
+def test_build_tasks_code_carries_after_midnight_hour() -> None:
+    # Early-morning hours (before the 04:00 day start) become 24-27 in the code's time
+    # field so the code sorts in logical-day order (SPEC §2, §5).
+    tasks = build_tasks([entry("03.13", "10:00", "PGM"), entry("03.13", "01:00", "SLEEP")])
+    codes = {t.planned_start: t.code for t in tasks}
+    assert codes["01:00"] == "0313-2500-SLEEP"  # 01:00 -> hour 25
+    assert codes["10:00"] == "0313-1000-PGM"  # daytime hour unchanged
 
 
 def test_build_tasks_full_day_with_midnight_boundary() -> None:
