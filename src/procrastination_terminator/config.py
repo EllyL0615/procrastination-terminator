@@ -23,6 +23,7 @@ class Config:
 
     discord_token: str
     discord_user_id: int
+    discord_channel_id: int
     llm_api_key: str
     llm_base_url: str
     llm_model: str
@@ -33,6 +34,7 @@ class Config:
     poll_seconds: int = 60
     personality_granularity: PersonalityGranularity = PersonalityGranularity.PER_TASK
     message_language: str = "zh"
+    dialogue_history_limit: int = 12  # recent DMs fed as context when writing a message (SPEC §4.5)
     plan_path: str = "data/plan.txt"
     progress_path: str = "data/progress.csv"
     history_path: str = "data/history.csv"
@@ -55,10 +57,12 @@ class Config:
         return cls(
             discord_token=_require("DISCORD_TOKEN"),
             discord_user_id=int(_require("DISCORD_USER_ID")),
+            discord_channel_id=int(_require("DISCORD_CHANNEL_ID")),
             llm_api_key=_require("LLM_API_KEY"),
             llm_base_url=_require("LLM_BASE_URL"),
             llm_model=_require("LLM_MODEL"),
             bot_name=os.environ.get("BOT_NAME", "Bot"),
             timezone=os.environ.get("TIMEZONE", "Europe/London"),
             message_language=os.environ.get("MESSAGE_LANG", "zh"),
+            dialogue_history_limit=int(os.environ.get("DIALOGUE_HISTORY", "12")),
         )

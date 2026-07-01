@@ -10,12 +10,15 @@ gateway, etc.); the endpoint, model, and message language come from config.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from .config import Config
 from .models import Personality, Task, TaskType
+
+# Outcome of classifying an in-progress task's reply (SPEC §4.2, §6).
+ReplyKind = Literal["completed", "progress", "chat"]
 
 _PERSONA: dict[Personality, str] = {
     Personality.GENTLE: "gentle and encouraging",
@@ -49,14 +52,19 @@ class LLMClient:
             timeout=30.0,
         )
 
-    async def _chat(self, system: str, user: str, *, json_mode: bool = False) -> str:
-        payload: dict[str, Any] = {
-            "model": self._config.llm_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
+    async def _chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool = False,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        if history:
+            messages.extend(history)  # recent conversation turns, oldest first
+        messages.append({"role": "user", "content": user})
+        payload: dict[str, Any] = {"model": self._config.llm_model, "messages": messages}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         response = await self._http.post("/chat/completions", json=payload)
@@ -75,21 +83,45 @@ class LLMClient:
         return TaskType(_extract_json(content)["type"])
 
     async def judge_started(self, task: Task, reply: str) -> bool:
-        """Judge whether the user's reply means they actually started (SPEC §4.1)."""
+        """Judge, with a high bar, whether the reply shows the user really started (SPEC §4.1)."""
         return await self._judge_bool(
             f"The user was nagged to start the task: {task.description!r}. "
-            "Did they actually start (not just acknowledge or stall)? "
-            'Reply as JSON: {"yes": true|false}.',
+            "Answer yes only if the message clearly shows they have actually begun focusing "
+            "on it -- not merely acknowledging, agreeing, or saying they will soon. If in "
+            'doubt, answer no. Reply as JSON: {"yes": true|false}.',
             reply,
         )
 
-    async def judge_completed(self, task: Task, reply: str) -> bool:
-        """Judge whether the user's reply means the task is done (SPEC §4.2)."""
-        return await self._judge_bool(
-            f"The user is working on the task: {task.description!r}. "
-            'Does their reply mean it is finished? Reply as JSON: {"yes": true|false}.',
+    async def classify_progress_reply(self, task: Task, reply: str) -> ReplyKind:
+        """Classify an in-progress task's reply in one call (SPEC §4.2, §6).
+
+        ``"completed"`` = the task is finished; ``"progress"`` = SUBSTANTIVE new info
+        about the task (what is done, how far along, a specific blocker) worth
+        recording; ``"chat"`` = everything else, including bare acknowledgements,
+        promises, or intentions ("I'll focus") that carry no concrete progress -- so a
+        vague reply never overwrites a real one. Unknown output falls back to ``"chat"``
+        (safe: leaves the file untouched).
+        """
+        content = await self._chat(
+            f"The user is working on the task: {task.description!r}. Classify their message.\n"
+            '- "completed": it clearly means the task is finished.\n'
+            '- "progress": it reports substantive new information about how the task itself '
+            "is going -- what they have done, how far along they are, or a specific obstacle. "
+            "It must carry real content worth recording.\n"
+            '- "chat": everything else -- acknowledgements, promises, or intentions to work '
+            '("ok", "I will focus now", "I will do it properly"), reactions to you, mood, '
+            "small talk, or off-topic. A vague promise with no concrete task detail is chat, "
+            "NOT progress.\n"
+            'Reply as JSON: {"kind": "completed" | "progress" | "chat"}.',
             reply,
+            json_mode=True,
         )
+        kind = str(_extract_json(content).get("kind", "")).lower()
+        if kind == "completed":
+            return "completed"
+        if kind == "progress":
+            return "progress"
+        return "chat"
 
     async def _judge_bool(self, system: str, reply: str) -> bool:
         content = await self._chat(system, reply, json_mode=True)
@@ -126,21 +158,26 @@ class LLMClient:
         *,
         personality: Personality,
         intensity: int = 0,
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """Write one styled message for ``situation`` (SPEC §4.5).
 
         ``situation`` describes what to say (built by the bot); this applies the
         persona, escalation ``intensity`` (0 = mild), and the configured language.
+        ``history`` is the recent channel conversation (oldest first); it grounds the
+        wording so an in-chat correction the user just made is honored (SPEC §4.5).
         """
         language = _LANGUAGE_NAME.get(self._config.message_language, self._config.message_language)
         system = (
-            f"You are {self._config.bot_name}, a study accountability bot DMing one user. "
+            f"You are {self._config.bot_name}, a study accountability bot nudging one user. "
             f"Write a single short message in {language}. "
             f"Persona: {_PERSONA[personality]}. "
             f"Forcefulness: {intensity} (0 = mild, higher = more intense). "
+            "The turns before this are your recent chat history with the user; honor any "
+            "correction or clarification they made there (e.g. what a task really is). "
             "Output only the message text."
         )
-        return (await self._chat(system, situation)).strip()
+        return (await self._chat(system, situation, history=history)).strip()
 
     async def parse_plan(self, text: str) -> list[dict[str, str]]:
         """Extract structured task entries from free-form plan.txt (SPEC §9).

@@ -28,6 +28,6 @@
 
 ## 隐私与密钥
 
-- 密钥走环境变量：`DISCORD_TOKEN` / `DISCORD_USER_ID` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`。
+- 密钥走环境变量：`DISCORD_TOKEN` / `DISCORD_USER_ID` / `DISCORD_CHANNEL_ID` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`。
 - 模板见 `.env.example`（只有键名）；真实值放 `.env`（已 gitignore）。
 - 运行期数据 `plan.txt` / `progress.csv` / `history.csv`（默认在 `data/`）含个人计划，**不提交**（已 gitignore）。

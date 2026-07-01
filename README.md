@@ -2,7 +2,7 @@
 
 A single-user Discord bot that nags a student through their daily study plan. It
 reads a hand-written `plan.txt`, treats each study/work task as a lifecycle
-object, and DMs you to start, checks your progress at the midpoint and end, and
+object, and messages you (in a dedicated channel) to start, checks your progress at the midpoint and end, and
 prompts you each night to plan tomorrow.
 
 The full product spec lives in [`docs/SPEC.md`](docs/SPEC.md).
