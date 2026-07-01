@@ -320,8 +320,26 @@ sudo systemctl status procrastination-terminator   # should be active (running)
 journalctl -u procrastination-terminator -f         # follow the logs
 ```
 
-After changing `.env` or pulling new code (`git pull && uv sync`), apply it with
-`sudo systemctl restart procrastination-terminator`.
+Because the service is **enabled**, it starts automatically on boot — after an
+accidental shutdown or reboot the bot comes back on its own; `systemctl status` confirms
+it. Day-to-day management:
+
+```bash
+# Update to the latest code and apply it
+cd ~/procrastination-terminator && git pull && uv sync
+sudo systemctl restart procrastination-terminator
+
+# Apply a changed .env (restart is enough — no need to pull)
+sudo systemctl restart procrastination-terminator
+
+# Stop the bot for now (it will still auto-start on the next reboot)
+sudo systemctl stop procrastination-terminator
+
+# Stop it and turn off auto-start (fully off until you re-enable)
+sudo systemctl disable --now procrastination-terminator
+```
+
+`git pull` never touches your `.env` or `data/` (both gitignored), so updating is safe.
 
 For a full walkthrough on Oracle Cloud's free ARM (Ampere A1) instance — creating the
 VM, connecting, and getting your plan onto it — see

@@ -104,25 +104,8 @@ You want to see `logging in using static token` followed by `connected to Gatewa
 you're done — the bot runs in the background and survives logout and reboots, so you can
 close the SSH session.
 
-## Operating the service
-
-```bash
-# Follow the logs live (Ctrl+C to stop watching; the service keeps running)
-journalctl -u procrastination-terminator -f
-
-# Restart / stop / start
-sudo systemctl restart procrastination-terminator
-sudo systemctl stop procrastination-terminator
-sudo systemctl start procrastination-terminator
-
-# Update to the latest code, then restart
-cd ~/procrastination-terminator && git pull && uv sync
-sudo systemctl restart procrastination-terminator
-```
-
-- After editing `.env`, run `sudo systemctl restart` for the change to take effect.
-- After editing your plan (the Notion `plan` page, or `data/plan.txt` in file mode),
-  send `!sync` in Discord — no restart needed.
+For day-to-day management — updating, restarting, stopping, and following the logs — see
+the README's [Running 24/7 with systemd](../README.md#running-247-with-systemd) section.
 
 ## Using VS Code Remote-SSH (optional)
 
