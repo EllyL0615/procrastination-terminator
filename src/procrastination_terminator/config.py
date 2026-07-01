@@ -61,7 +61,7 @@ class Config:
                 raise RuntimeError(f"missing required env var: {key}")
             return value
 
-        return cls(
+        config = cls(
             discord_token=_require("DISCORD_TOKEN"),
             discord_user_id=int(_require("DISCORD_USER_ID")),
             discord_channel_id=int(_require("DISCORD_CHANNEL_ID")),
@@ -78,3 +78,17 @@ class Config:
             notion_plan_page_id=os.environ.get("NOTION_PLAN_PAGE_ID", ""),
             notion_context_page_id=os.environ.get("NOTION_CONTEXT_PAGE_ID", ""),
         )
+        if config.storage_backend == "notion":
+            missing = [
+                name
+                for name, value in (
+                    ("NOTION_API_KEY", config.notion_api_key),
+                    ("NOTION_DB_ID", config.notion_db_id),
+                    ("NOTION_PLAN_PAGE_ID", config.notion_plan_page_id),
+                    ("NOTION_CONTEXT_PAGE_ID", config.notion_context_page_id),
+                )
+                if not value
+            ]
+            if missing:
+                raise RuntimeError(f"STORAGE_BACKEND=notion requires: {', '.join(missing)}")
+        return config

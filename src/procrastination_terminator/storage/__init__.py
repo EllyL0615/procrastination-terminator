@@ -9,10 +9,15 @@ from __future__ import annotations
 from ..config import Config
 from .base import StorageBackend
 from .file_backend import FileBackend
+from .notion_backend import NotionBackend
 
-__all__ = ["FileBackend", "StorageBackend", "build_backend"]
+__all__ = ["FileBackend", "NotionBackend", "StorageBackend", "build_backend"]
 
 
 def build_backend(config: Config) -> StorageBackend:
-    """Construct the configured storage backend (file only, for now)."""
-    return FileBackend(config)
+    """Construct the storage backend named by ``config.storage_backend`` (SPEC §9)."""
+    if config.storage_backend == "file":
+        return FileBackend(config)
+    if config.storage_backend == "notion":
+        return NotionBackend(config)
+    raise ValueError(f"unknown STORAGE_BACKEND: {config.storage_backend!r}")

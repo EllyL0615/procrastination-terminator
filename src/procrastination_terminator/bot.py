@@ -146,6 +146,7 @@ class Supervisor(discord.Client):
         self._last_day_end: date | None = None
 
     async def setup_hook(self) -> None:
+        await self.store.refresh_context()  # prime the standing-context cache (SPEC §2)
         self.tick.change_interval(seconds=self.config.poll_seconds)
         self.tick.start()
 
@@ -288,6 +289,7 @@ class Supervisor(discord.Client):
             await self._day_end(now)
 
     async def _day_start(self, now: datetime) -> None:
+        await self.store.refresh_context()  # once a day is enough for standing context
         today_md = _md(daytime.logical_day_of(now, self.config.day_start))
         await self.store.archive_past(today_md)
         await self._sync_plan(now)
@@ -370,6 +372,8 @@ class Supervisor(discord.Client):
             await self._modify(arg)
         elif name == "clear":
             await self._clear(arg)
+        elif name == "reloadcontext":
+            await self._reload_context()
         elif name == "tick":
             await self._debug_tick(arg)
         else:
@@ -503,6 +507,16 @@ class Supervisor(discord.Client):
         elif touched:
             await self.store.upsert_changed(touched)
         await self._send(f"Applied {len(touched)} update(s) and {len(deleted)} deletion(s).")
+
+    async def _reload_context(self) -> None:
+        """Reload the standing context (glossary/tone) from its source (SPEC §2, §4.5).
+
+        The context is cached and normally refreshed only at startup / day-start; this
+        lets the user apply an edit immediately. A no-op for the file backend, which
+        reads the file live on every message.
+        """
+        await self.store.refresh_context()
+        await self._send("Reloaded context.")
 
     async def _clear(self, arg: str) -> None:
         """Delete the bot's own messages in the channel (SPEC §6).
