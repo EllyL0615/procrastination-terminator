@@ -18,7 +18,7 @@ from procrastination_terminator.notion_init import (
 )
 
 _TOKEN = "ntn_secret_value"
-_PARENT_ID = "390e7f84dd8080afa180cb25b76bbdb0"
+_PARENT_ID = "0123456789abcdef0123456789abcdef"
 
 
 def test_database_properties_match_the_model() -> None:
@@ -92,19 +92,19 @@ def test_notion_error_surfaces_message_without_leaking_token(
 
 
 def test_normalize_page_id_from_copy_link_url() -> None:
-    url = "https://app.notion.com/p/Procrastination-Terminator-390e7f84dd8080afa180cb25b76bbdb0?source=copy_link"
-    assert _normalize_page_id(url) == "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+    url = "https://app.notion.com/p/Procrastination-Terminator-0123456789abcdef0123456789abcdef?source=copy_link"
+    assert _normalize_page_id(url) == "01234567-89ab-cdef-0123-456789abcdef"
 
 
 def test_normalize_page_id_from_bare_hex() -> None:
     assert (
-        _normalize_page_id("390e7f84dd8080afa180cb25b76bbdb0")
-        == "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+        _normalize_page_id("0123456789abcdef0123456789abcdef")
+        == "01234567-89ab-cdef-0123-456789abcdef"
     )
 
 
 def test_normalize_page_id_passes_through_dashed_uuid() -> None:
-    uuid = "390e7f84-dd80-80af-a180-cb25b76bbdb0"
+    uuid = "01234567-89ab-cdef-0123-456789abcdef"
     assert _normalize_page_id(uuid) == uuid
 
 
