@@ -673,9 +673,14 @@ class Supervisor(discord.Client):
         return chunks
 
     def _table_row(self, t: Task, detailed: bool) -> str:
-        first = f"{_STATUS_EMOJI[t.status]} {t.planned_start}  {_fit(t.description, _TASK_WIDTH)}"
+        prefix = f"{_STATUS_EMOJI[t.status]} {t.planned_start}  "
+        if not detailed:
+            # Single column: nothing lines up after the task, so show it in full.
+            return prefix + unicodedata.normalize("NFKC", t.description).replace("\n", " ")
+        # Detailed: pad the task to a fixed width so the progress column lines up.
+        first = prefix + _fit(t.description, _TASK_WIDTH)
         progress = (t.latest_progress or "").strip()
-        if not detailed or not progress:
+        if not progress:
             return first
         # Last column, so cap it at a max width but drop the padding _fit adds.
         return f"{first}  # {_fit(progress, _PROGRESS_WIDTH).rstrip()}"
