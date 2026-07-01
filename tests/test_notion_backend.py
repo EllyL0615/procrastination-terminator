@@ -335,7 +335,7 @@ def test_load_progress_sorts_by_logical_day() -> None:
             await backend.upsert_changed(
                 [
                     _task("0701-2300-SLEEP", planned_start="23:00", planned_end="01:00"),
-                    _task("0701-0000-MID", planned_start="00:00", planned_end="08:00"),
+                    _task("0701-2400-MID", planned_start="00:00", planned_end="08:00"),
                     _task("0701-1400-GAME", planned_start="14:00", planned_end="15:00"),
                 ]
             )
@@ -343,9 +343,9 @@ def test_load_progress_sorts_by_logical_day() -> None:
         finally:
             await backend.aclose()
 
-    # 14:00 first, then 23:00; the after-midnight 00:00 trails its logical day.
+    # Rows sort by code; 00:00's code is 2400, so it trails the logical day.
     assert asyncio.run(scenario()) == [
         "0701-1400-GAME",
         "0701-2300-SLEEP",
-        "0701-0000-MID",
+        "0701-2400-MID",
     ]

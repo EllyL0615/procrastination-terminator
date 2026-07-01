@@ -26,21 +26,18 @@ class FileBackend:
         self._history_path = config.history_path
         self._plan_path = config.plan_path
         self._context_path = config.context_path
-        self._day_start = config.day_start
 
     async def load_progress(self) -> list[Task]:
         return store.load(self._progress_path)
 
     async def upsert_changed(self, changed: Iterable[Task]) -> None:
-        store.upsert_changed(self._progress_path, changed, self._day_start)
+        store.upsert_changed(self._progress_path, changed)
 
     async def write_all(self, tasks: list[Task]) -> None:
-        store.write_all(self._progress_path, tasks, self._day_start)
+        store.write_all(self._progress_path, tasks)
 
     async def archive_past(self, current_logical_day: str) -> None:
-        store.archive_past(
-            self._progress_path, self._history_path, current_logical_day, self._day_start
-        )
+        store.archive_past(self._progress_path, self._history_path, current_logical_day)
 
     async def read_plan(self) -> str:
         path = Path(self._plan_path)

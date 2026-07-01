@@ -23,7 +23,6 @@ from typing import Any
 
 import httpx
 
-from .. import daytime
 from ..config import Config
 from ..models import Status, Task, TaskType
 from ..store import _join_range, _split_range
@@ -58,7 +57,6 @@ class NotionBackend:
         self._db_id = config.notion_db_id
         self._plan_page_id = config.notion_plan_page_id
         self._context_page_id = config.notion_context_page_id
-        self._day_start = config.day_start
         self._http = client or httpx.AsyncClient(
             base_url=_BASE_URL,
             headers={
@@ -73,20 +71,10 @@ class NotionBackend:
     # -- StorageBackend interface -------------------------------------------
 
     async def load_progress(self) -> list[Task]:
-        # Notion query order is not guaranteed, so sort by logical day here to match
-        # the file backend (kept physically sorted on write). The monitor re-sorts its
-        # own working set, but !progress and the day-end summary read this order.
+        # Notion query order is not guaranteed, so sort by code -- which encodes
+        # logical-day order (SPEC §2) -- to match the file backend and !progress.
         tasks = [self._props_to_task(page) for page in await self._query_active_pages()]
-        return sorted(tasks, key=self._order_key)
-
-    def _order_key(self, task: Task) -> tuple[str, int]:
-        try:
-            minutes = daytime.logical_order(
-                daytime.parse_clock(task.planned_start), self._day_start
-            )
-        except ValueError:
-            minutes = 0
-        return (task.date, minutes)
+        return sorted(tasks, key=lambda task: task.code)
 
     async def upsert_changed(self, changed: Iterable[Task]) -> None:
         updates = list(changed)

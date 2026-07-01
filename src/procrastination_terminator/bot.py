@@ -217,7 +217,7 @@ class Supervisor(discord.Client):
             except ValueError:
                 continue
             resolved.append((task, start, end))
-        resolved.sort(key=lambda row: row[1])
+        resolved.sort(key=lambda row: row[0].code)  # code encodes logical-day order (SPEC §2)
         return resolved
 
     def _apply(

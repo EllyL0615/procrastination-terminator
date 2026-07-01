@@ -132,7 +132,7 @@ def build_tasks(entries: list[dict[str, str]], day_start: time = time(4, 0)) -> 
     """
     ordered = sorted(
         entries,
-        key=lambda e: (e["date"], daytime.logical_order(daytime.parse_clock(e["time"]), day_start)),
+        key=lambda e: (e["date"], _code_clock(e["time"], day_start)),
     )
     tasks: list[Task] = []
     for i, entry in enumerate(ordered):

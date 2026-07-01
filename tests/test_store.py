@@ -130,15 +130,15 @@ def test_write_all_orders_rows_chronologically_with_midnight_last(tmp_path: Path
         path,
         [
             _timed("0701-1000-REVISE", "07.01", "10:00", "00:00"),
-            _timed("0701-0000-SLEEP", "07.01", "00:00", "00:00"),
+            _timed("0701-2400-SLEEP", "07.01", "00:00", "00:00"),
             _timed("0701-0530-LOGIC", "07.01", "05:30", "07:00"),
         ],
     )
-    # 00:00 sleep is the logical day's tail, so it lands last despite the small clock.
+    # Rows sort by code; the after-midnight sleep's code is 2400, so it lands last.
     assert [t.code for t in store.load(path)] == [
         "0701-0530-LOGIC",
         "0701-1000-REVISE",
-        "0701-0000-SLEEP",
+        "0701-2400-SLEEP",
     ]
 
 
