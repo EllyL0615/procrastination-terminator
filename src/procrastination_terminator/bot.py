@@ -191,6 +191,16 @@ class Supervisor(discord.Client):
     @tick.before_loop
     async def _before_tick(self) -> None:
         await self.wait_until_ready()
+        # Load the plan on startup. After day start the first tick re-fires the
+        # day-start boundary (SPEC §3.1) and syncs anyway; this covers starts in
+        # the [midnight, day start) window, where that boundary is hours away.
+        now = datetime.now(self.config.tz)
+        if now.time() < self.config.day_start:
+            try:
+                await self._sync_plan(now)
+            except Exception:
+                # A raise here would keep the tick loop from ever starting.
+                _log.exception("startup plan sync failed; continuing with existing snapshot")
 
     async def _supervise(self, now: datetime) -> None:
         today = daytime.logical_day_of(now, self.config.day_start)
